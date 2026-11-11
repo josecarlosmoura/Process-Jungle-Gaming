@@ -1,0 +1,60 @@
+# Dependências e artefatos de build
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Bun
+bun.lockb
+.bun/
+
+# Variáveis de ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cobertura de testes / relatórios
+coverage/
+.nyc_output/
+test-results/
+
+# Binários, imagens e arquivos compilados
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.class
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Editor/IDE e SO
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker (volumes/dados locais, nunca o compose em si)
+docker/data/
+*.pid
+
+# Documentação interna do desafio e configs de ferramentas de IA
+# (não fazem parte do código-fonte entregável)
+Documents/
+.cursor/
+.agents/
+.claude/
+.windsurf/
+.specs/
+CLAUDE.md
