@@ -41,8 +41,11 @@ afterAll(async () => {
 describe("migration:up / migration:down", () => {
   test("migration:up creates the pgcrypto extension and records it in mikro_orm_migrations", async () => {
     // garante a precondicao "down" por si mesmo, em vez de depender da ordem de execucao
-    // dos testes deste arquivo (achado do Verifier: um proof isolado nao pode herdar estado)
-    execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" });
+    // dos testes deste arquivo (achado do Verifier: um proof isolado nao pode herdar estado).
+    // "--to 0" reverte TODAS as migrations, nao so a mais recente - a partir da implementação 
+    // da migration de wallets existe mais de uma migration no projeto, e "migration:down" sem
+    // argumento desfaz só um passo.
+    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
     await expect(pgcryptoExists()).resolves.toBe(false);
 
     execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
@@ -57,7 +60,7 @@ describe("migration:up / migration:down", () => {
     execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
     await expect(pgcryptoExists()).resolves.toBe(true);
 
-    execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" });
+    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
     await expect(pgcryptoExists()).resolves.toBe(false);
     await expect(migrationRowExists()).resolves.toBe(false);

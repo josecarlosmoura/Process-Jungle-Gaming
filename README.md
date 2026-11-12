@@ -22,9 +22,10 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | MikroORM + migrations + `/health/ready` (Postgres)      | ✅ concluído |
 | Cliente SQS + filas + `/health/ready` (SQS)             | ✅ concluído |
 | `Money` (value object de domínio)                       | ✅ concluído |
-| Domínio (`Wallet`, `WagerTransaction`, Ledger)          | ⏳ próximo   |
+| Tabela `wallets` (migration + constraints no banco)     | ✅ concluído |
+| Entidade de domínio `Wallet` (MikroORM)                 | ⏳ próximo   |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem seu primeiro bloco de construção, `Money` (`src/domain/money.ts`), mas ele ainda não é consumido por nenhuma rota ou fila — é um value object em memória, exercido apenas pela sua própria suíte de testes.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem seu primeiro bloco de construção, `Money` (`src/domain/money.ts`), mas ele ainda não é consumido por nenhuma rota ou fila — é um value object em memória, exercido apenas pela sua própria suíte de testes. A tabela `wallets` já existe no banco, com as garantias de unicidade (`player_id` + `currency`), saldo nunca negativo e formato de moeda aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`) — mas ainda não há nenhuma entidade MikroORM nem rota que a leia ou escreva; ela só é exercida hoje pelo teste de integração da própria migration.
 
 ## Endpoints
 
@@ -115,7 +116,7 @@ src/
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
 ├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
-│   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/
+│   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/ (inclui a tabela wallets)
 │   └── messaging/      # cliente SQS (SqsModule), health check do SQS, nomes das filas
 └── presentation/       # controllers HTTP / consumer SQS — adaptadores finos
     └── health/         # GET /health/live, GET /health/ready
@@ -126,11 +127,17 @@ src/
 Rodam via a CLI do MikroORM (`@mikro-orm/cli`), configurada em `mikro-orm.config.ts` (raiz do projeto) e `src/infrastructure/database/mikro-orm.config.ts`. Os arquivos ficam em `src/infrastructure/database/migrations/`.
 
 ```bash
-bun run migration:up      # aplica as migrations pendentes contra o Postgres do Compose
-bun run migration:down    # reverte a última migration aplicada
+bun run migration:up               # aplica todas as migrations pendentes contra o Postgres do Compose
+bun run migration:down             # reverte só a última migration aplicada (um passo)
+bun run migration:down -- --to 0   # reverte todas as migrations (volta ao banco vazio)
 ```
 
 Nenhuma migration roda automaticamente no boot da aplicação — são sempre comandos explícitos de operador/CI.
+
+| Migration | Cria |
+| --- | --- |
+| `Migration20261112123041_Initial` | Extensão `pgcrypto` (usada por `gen_random_uuid()` em inserts manuais/testes) |
+| `Migration20261112175001_CreateWallets` | Tabela `wallets`: `id`, `player_id`, `currency`, `balance_amount`, `version`, `created_at`, `updated_at`, com `UNIQUE (player_id, currency)`, `CHECK (balance_amount >= 0)` e `CHECK` de formato de moeda (3 letras maiúsculas) |
 
 ## Docker Compose
 
