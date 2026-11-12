@@ -1,11 +1,16 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { AppConfigService } from "./infrastructure/config/app-config.service";
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
-  const port = process.env.PORT ?? 3000;
-  await app.listen(port);
+  const config = app.get(AppConfigService);
+  await app.listen(config.port);
 }
 
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+});

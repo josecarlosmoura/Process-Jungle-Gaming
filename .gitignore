@@ -39,7 +39,7 @@ test-results/
 *.rar
 
 # Editor/IDE e SO
-.vscode/
+#.vscode/
 .idea/
 *.swp
 .DS_Store

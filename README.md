@@ -18,12 +18,18 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | --- | --- |
 | Scaffold do projeto (Bun + NestJS + TypeScript estrito) | ✅ concluído |
 | Docker Compose base (PostgreSQL + LocalStack) | ✅ concluído |
-| ConfigModule + variáveis de ambiente + `/health/live` | ⏳ próximo |
-| MikroORM + migrations + `/health/ready` (Postgres) | pendente |
+| ConfigModule + variáveis de ambiente + `/health/live` | ✅ concluído |
+| MikroORM + migrations + `/health/ready` (Postgres) | ⏳ próximo |
 | Cliente SQS + filas + `/health/ready` (SQS) | pendente |
 | Domínio (`Wallet`, `WagerTransaction`, `Money`, Ledger) | pendente |
 
-A aplicação NestJS ainda não expõe nenhum endpoint de negócio nem health check — isso começa na próxima etapa. Hoje só existe o boot vazio do Nest e a infraestrutura de apoio (Postgres + LocalStack) via Docker Compose.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar) e expõe `GET /health/live` — o único endpoint de negócio até aqui ainda não existe, isso começa nas próximas tarefas.
+
+## Endpoints
+
+| Método | Rota | Descrição | Autenticação |
+| --- | --- | --- | --- |
+| `GET` | `/health/live` | Confirma só que o processo está vivo — nunca consulta Postgres, SQS ou qualquer dependência externa. Responde `200 { "status": "ok" }` mesmo com `docker compose down`. | Nenhuma (endpoint aberto) |
 
 ## Pré-requisitos
 
@@ -71,8 +77,12 @@ Documentadas em `.env.example` (copie para `.env` antes de subir o ambiente — 
 
 | Variável | Para quê serve |
 | --- | --- |
+| `PORT` | Porta HTTP em que a aplicação NestJS escuta (default `3000`) |
+| `NODE_ENV` | Ambiente de execução (`development`\|`test`\|`production`, default `development`) |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Conexão com o PostgreSQL do Docker Compose |
 | `LOCALSTACK_ENDPOINT`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Conexão com o LocalStack (SQS) — as credenciais AWS são dummy, só para uso local |
+
+Todas são validadas no boot (`src/infrastructure/config/env.schema.ts`, via `zod`) de forma tipada — uma variável ausente, de tipo errado ou malformada (ex.: `LOCALSTACK_ENDPOINT` sem `http://`) derruba o processo imediatamente, com uma mensagem citando a variável, antes de qualquer rota aceitar tráfego. Variáveis extras do sistema operacional são ignoradas sem quebrar a validação.
 
 **Troubleshooting — `FATAL: password authentication failed` ao conectar com um cliente externo (DBeaver, pgAdmin etc.):** se a sua máquina já tem um PostgreSQL nativo instalado (comum em Windows, via instalador oficial), pode haver um conflito: esse Postgres nativo costuma escutar em `5432` via IPv6 (`[::]:5432`), enquanto o Docker publica em IPv4 (`0.0.0.0:5432`); como `localhost` pode resolver para IPv6 primeiro, o cliente acaba conectando no Postgres nativo errado em vez do container. Duas saídas, sem precisar desligar nada:
 - No cliente, use o host `127.0.0.1` em vez de `localhost` (força IPv4); ou
@@ -85,7 +95,9 @@ src/
 ├── domain/           # entidades e regras de negócio — nunca importa NestJS/ORM
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
 ├── infrastructure/     # MikroORM, publisher SQS, adaptadores concretos
+│   └── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
 └── presentation/       # controllers HTTP / consumer SQS — adaptadores finos
+    └── health/         # GET /health/live
 ```
 
 ## Docker Compose

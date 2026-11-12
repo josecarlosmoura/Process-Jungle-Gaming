@@ -11,6 +11,7 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "outDir": "./dist",
+    "sourceMap": true,
     "noEmitOnError": true,
     "incremental": false,
     "skipLibCheck": true,
