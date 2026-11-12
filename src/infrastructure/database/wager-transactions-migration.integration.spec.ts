@@ -255,7 +255,11 @@ describe("wager_transactions table reversibility (migration:down)", () => {
     ensureWagerTransactionsTableExists();
     await expect(tableExists("wager_transactions")).resolves.toBe(true);
 
-    execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" });
+    // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir da
+    // migration do ledger de wallet, que depende de wager_transactions via FK, isso deixou de ser
+    // CreateWagerTransactions. "--to 0" reverte TODAS as migrations, independente de quantas
+    // existirem depois desta, mesmo padrao ja usado nas outras suites de migration deste diretorio.
+    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
     await expect(tableExists("wager_transactions")).resolves.toBe(false);
     await expect(migrationRowExists("%CreateWagerTransactions%")).resolves.toBe(false);
