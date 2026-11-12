@@ -3,7 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 
 describe("GET /health/ready", () => {
-  test("boots against Compose Postgres and responds 200 with postgres up over real HTTP", async () => {
+  test("boots against Compose Postgres and LocalStack and responds 200 with postgres up and sqs up over real HTTP", async () => {
     // @nestjs/config le process.env no instante em que o modulo e importado - por isso o env
     // precisa ser setado antes do import dinamico de AppModule (ver app.e2e.spec.ts)
     Object.assign(process.env, {
@@ -33,7 +33,7 @@ describe("GET /health/ready", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toEqual({ status: "ok", postgres: "up" });
+    expect(body).toEqual({ status: "ok", postgres: "up", sqs: "up" });
 
     await app.close();
   });

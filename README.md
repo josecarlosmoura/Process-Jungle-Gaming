@@ -20,17 +20,17 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | Docker Compose base (PostgreSQL + LocalStack)           | ✅ concluído |
 | ConfigModule + variáveis de ambiente + `/health/live`   | ✅ concluído |
 | MikroORM + migrations + `/health/ready` (Postgres)      | ✅ concluído |
-| Cliente SQS + filas + `/health/ready` (SQS)             | ⏳ próximo   |
-| Domínio (`Wallet`, `WagerTransaction`, `Money`, Ledger) | pendente     |
+| Cliente SQS + filas + `/health/ready` (SQS)             | ✅ concluído |
+| Domínio (`Wallet`, `WagerTransaction`, `Money`, Ledger) | ⏳ próximo   |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas.
 
 ## Endpoints
 
 | Método | Rota            | Descrição                                                                                                                                                                 | Autenticação              |
 | ------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | `GET`  | `/health/live`  | Confirma só que o processo está vivo — nunca consulta Postgres, SQS ou qualquer dependência externa. Responde `200 { "status": "ok" }` mesmo com `docker compose down`. | Nenhuma (endpoint aberto) |
-| `GET`  | `/health/ready` | Confirma que a aplicação consegue executar uma query real no PostgreSQL configurado (timeout de 2000ms). Responde `200 { "status": "ok", "postgres": "up" }` quando alcançável, `503 { "status": "error", "postgres": "down" }` quando não (ainda não considera SQS — isso é a próxima tarefa). | Nenhuma (endpoint aberto) |
+| `GET`  | `/health/ready` | Confirma que a aplicação consegue executar uma query real no PostgreSQL **e** resolver a fila principal no SQS/LocalStack configurados (timeout de 2000ms cada, em paralelo). Responde `200 { "status": "ok", "postgres": "up", "sqs": "up" }` quando ambos alcançáveis, `503 { "status": "error", "postgres": "up"/"down", "sqs": "up"/"down" }` quando qualquer um falha, sempre com os dois campos presentes para indicar qual dependência está fora do ar. | Nenhuma (endpoint aberto) |
 
 ## Pré-requisitos
 
@@ -46,12 +46,17 @@ bun install
 # 2. Criar o .env local a partir do template (nunca commitar o .env real)
 cp .env.example .env
 
-# 3. Subir a infraestrutura (PostgreSQL + LocalStack/SQS)
+# 3. Subir a infraestrutura (PostgreSQL + LocalStack/SQS); as filas sao provisionadas automaticamente
 docker compose up -d
 
-# 4. Conferir que os dois serviços ficaram saudáveis (pode levar alguns segundos)
+# 4. Conferir que os serviços ficaram saudáveis (pode levar alguns segundos)
 docker compose ps
-# Esperado: "postgres" e "localstack" com status "healthy"
+# Esperado: "postgres" e "localstack" com status "healthy"; "localstack-init" com status
+# "Exited (0)" — ele roda uma única vez para criar as filas e sai, não é um serviço de longa duração
+
+# 4b. Opcional: confirmar que as filas existem
+aws --endpoint-url=http://localhost:4566 sqs list-queues
+# Esperado: lista wager-transactions.fifo e wager-transactions-dlq.fifo
 
 # 5. Aplicar as migrations contra o Postgres do Compose
 bun run migration:up
@@ -100,12 +105,16 @@ Todas são validadas no boot (`src/infrastructure/config/env.schema.ts`, via `zo
 ## Estrutura de pastas
 
 ```
+scripts/
+└── setup-queues.sh    # provisiona as filas SQS no LocalStack (idempotente)
+
 src/
 ├── domain/           # entidades e regras de negócio — nunca importa NestJS/ORM
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
-├── infrastructure/     # MikroORM, publisher SQS, adaptadores concretos
+├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
-│   └── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/
+│   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/
+│   └── messaging/      # cliente SQS (SqsModule), health check do SQS, nomes das filas
 └── presentation/       # controllers HTTP / consumer SQS — adaptadores finos
     └── health/         # GET /health/live, GET /health/ready
 ```
@@ -123,4 +132,19 @@ Nenhuma migration roda automaticamente no boot da aplicação — são sempre co
 
 ## Docker Compose
 
-`docker-compose.yml` sobe `postgres` e `localstack` numa rede dedicada (`wagering-net`), cada um com healthcheck próprio. A aplicação NestJS ainda **não** faz parte do Compose (isso entra mais adiante, quando houver múltiplas réplicas para testar) — hoje ela roda localmente via `bun run start:dev`, apontando para os serviços subidos pelo Compose.
+`docker-compose.yml` sobe `postgres` e `localstack` numa rede dedicada (`wagering-net`), cada um com healthcheck próprio, e um terceiro serviço, `localstack-init`, que roda uma única vez (assim que `localstack` fica saudável), provisiona as filas SQS e sai — não é um serviço de longa duração, então aparece como `Exited (0)` em `docker compose ps`, o que é esperado. A aplicação NestJS ainda **não** faz parte do Compose (isso entra mais adiante, quando houver múltiplas réplicas para testar) — hoje ela roda localmente via `bun run start:dev`, apontando para os serviços subidos pelo Compose.
+
+## Filas SQS
+
+Provisionadas automaticamente por `scripts/setup-queues.sh` (executado pelo serviço `localstack-init` do Compose, ou manualmente contra qualquer LocalStack já no ar):
+
+```bash
+scripts/setup-queues.sh   # roda contra http://localhost:4566 por padrão (SQS_ENDPOINT_URL sobrescreve)
+```
+
+| Fila | Papel |
+| --- | --- |
+| `wager-transactions.fifo` | Fila principal, FIFO — recebe as transações de aposta (consumidor chega na Fase 2) |
+| `wager-transactions-dlq.fifo` | Dead-letter queue, associada à fila principal via `RedrivePolicy` |
+
+O script é idempotente (rodar mais de uma vez não duplica nem falha) e não publica nem consome nenhuma mensagem — isso é escopo de tarefas futuras. O valor de `maxReceiveCount` da `RedrivePolicy` é um placeholder nesta etapa; seu valor final e a justificativa formal ficam para a tarefa que fecha a política de DLQ.

@@ -3,7 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 
 describe("GET /health/ready - postgres down", () => {
-  test("boots with an unreachable Postgres and responds 503 with postgres down over real HTTP", async () => {
+  test("boots with an unreachable Postgres and responds 503 with postgres down and sqs up over real HTTP", async () => {
     // porta TCP sem nada escutando - conexao recusada rapido, sem precisar parar o Compose
     // @nestjs/config le process.env no instante em que o modulo e importado (ver app.e2e.spec.ts);
     // como e um import dinamico, fica em cache por processo - rodar este arquivo junto com
@@ -36,7 +36,7 @@ describe("GET /health/ready - postgres down", () => {
     const body = await response.json();
 
     expect(response.status).toBe(503);
-    expect(body).toEqual({ status: "error", postgres: "down" });
+    expect(body).toEqual({ status: "error", postgres: "down", sqs: "up" });
 
     await app.close();
   });
