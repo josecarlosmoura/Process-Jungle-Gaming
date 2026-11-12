@@ -23,8 +23,8 @@ export class CurrencyMismatchError extends Error {
   }
 }
 
-// RN-02: no more than 2 decimal digits; 0 or 1 is accepted and normalized on output.
-// Anchored end-to-end so it also rejects "NaN", "Infinity", scientific notation and "".
+// RN: no máximo 2 casas decimais; 0 ou 1 são aceitos e normalizados na saída.
+// Com âncoras de início e fim, de modo que também rejeita "NaN", "Infinity", notação científica e "".
 const AMOUNT_FORMAT = /^-?\d+(\.\d{1,2})?$/;
 
 export class Money {
