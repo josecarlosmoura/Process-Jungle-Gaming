@@ -21,9 +21,10 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | ConfigModule + variáveis de ambiente + `/health/live`   | ✅ concluído |
 | MikroORM + migrations + `/health/ready` (Postgres)      | ✅ concluído |
 | Cliente SQS + filas + `/health/ready` (SQS)             | ✅ concluído |
-| Domínio (`Wallet`, `WagerTransaction`, `Money`, Ledger) | ⏳ próximo   |
+| `Money` (value object de domínio)                       | ✅ concluído |
+| Domínio (`Wallet`, `WagerTransaction`, Ledger)          | ⏳ próximo   |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem seu primeiro bloco de construção, `Money` (`src/domain/money.ts`), mas ele ainda não é consumido por nenhuma rota ou fila — é um value object em memória, exercido apenas pela sua própria suíte de testes.
 
 ## Endpoints
 
@@ -110,6 +111,7 @@ scripts/
 
 src/
 ├── domain/           # entidades e regras de negócio — nunca importa NestJS/ORM
+│   └── money.ts       # Money: value object imutável de quantia monetária (decimal.js, nunca number)
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
 ├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
