@@ -169,7 +169,11 @@ describe("wallets table reversibility (migration:down)", () => {
     ensureWalletsTableExists();
     await expect(tableExists("wallets")).resolves.toBe(true);
 
-    execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" });
+    // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir de
+    // T104 (wager_transactions, que depende de wallets via FK) isso deixou de ser CreateWallets.
+    // "--to 0" reverte TODAS as migrations, independente de quantas existirem depois desta,
+    // mesmo padrao ja usado em migrations.integration.spec.ts (T004).
+    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
     await expect(tableExists("wallets")).resolves.toBe(false);
     await expect(migrationRowExists("%CreateWallets%")).resolves.toBe(false);

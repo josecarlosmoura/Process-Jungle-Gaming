@@ -23,9 +23,11 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | Cliente SQS + filas + `/health/ready` (SQS)             | ✅ concluído |
 | `Money` (value object de domínio)                       | ✅ concluído |
 | Tabela `wallets` (migration + constraints no banco)     | ✅ concluído |
-| Entidade de domínio `Wallet` (MikroORM)                 | ⏳ próximo   |
+| Entidade de domínio `Wallet` (Aggregate Root, sem ORM)  | ✅ concluído |
+| Tabela `wager_transactions` (migration + constraints no banco) | ✅ concluído |
+| Entidade de domínio `WagerTransaction`                  | ⏳ próximo   |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem seu primeiro bloco de construção, `Money` (`src/domain/money.ts`), mas ele ainda não é consumido por nenhuma rota ou fila — é um value object em memória, exercido apenas pela sua própria suíte de testes. A tabela `wallets` já existe no banco, com as garantias de unicidade (`player_id` + `currency`), saldo nunca negativo e formato de moeda aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`) — mas ainda não há nenhuma entidade MikroORM nem rota que a leia ou escreva; ela só é exercida hoje pelo teste de integração da própria migration.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem dois blocos de construção, `Money` (`src/domain/money.ts`) e `Wallet` (`src/domain/wallet.ts`, Aggregate Root com `open`/`rehydrate`/`debit`/`credit`), mas nenhum dos dois ainda é consumido por nenhuma rota ou fila — são classes de domínio puras (sem ORM, sem banco), exercidas apenas pela própria suíte de testes unitários. As tabelas `wallets` e `wager_transactions` já existem no banco, com as garantias de unicidade, integridade referencial e formato aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`/FK) — `wager_transactions` inclui a constraint de idempotência (`UNIQUE (idempotency_key)`), a unicidade de referência externa (`UNIQUE (provider_id, external_transaction_id)`), FKs para `wallets` e para si mesma (`ON DELETE RESTRICT`) e `CHECK`s fechados de `kind`/`status` — mas ainda não há nenhuma entidade MikroORM nem rota que leia ou escreva nenhuma das duas tabelas; ambas só são exercidas hoje pelos testes de integração das próprias migrations.
 
 ## Endpoints
 
@@ -112,11 +114,12 @@ scripts/
 
 src/
 ├── domain/           # entidades e regras de negócio — nunca importa NestJS/ORM
-│   └── money.ts       # Money: value object imutável de quantia monetária (decimal.js, nunca number)
+│   ├── money.ts       # Money: value object imutável de quantia monetária (decimal.js, nunca number)
+│   └── wallet.ts      # Wallet: Aggregate Root (open/rehydrate/debit/credit), sem ORM
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
 ├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
-│   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/ (inclui a tabela wallets)
+│   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/ (tabelas wallets e wager_transactions)
 │   └── messaging/      # cliente SQS (SqsModule), health check do SQS, nomes das filas
 └── presentation/       # controllers HTTP / consumer SQS — adaptadores finos
     └── health/         # GET /health/live, GET /health/ready
@@ -138,6 +141,7 @@ Nenhuma migration roda automaticamente no boot da aplicação — são sempre co
 | --- | --- |
 | `Migration20261112123041_Initial` | Extensão `pgcrypto` (usada por `gen_random_uuid()` em inserts manuais/testes) |
 | `Migration20261112175001_CreateWallets` | Tabela `wallets`: `id`, `player_id`, `currency`, `balance_amount`, `version`, `created_at`, `updated_at`, com `UNIQUE (player_id, currency)`, `CHECK (balance_amount >= 0)` e `CHECK` de formato de moeda (3 letras maiúsculas) |
+| `Migration20261112192841_CreateWagerTransactions` | Tabela `wager_transactions` (18 colunas, incluindo `kind`, `status`, `money_amount`/`money_currency`), com `UNIQUE (idempotency_key)`, `UNIQUE (provider_id, external_transaction_id)`, FK `wallet_id` → `wallets.id` e FK auto-referencial `reference_transaction_id` (ambas `ON DELETE RESTRICT`), `CHECK` fechado de `kind`/`status`, `CHECK` de formato de moeda e um índice não único em `(provider_id, reference_external_transaction_id)` |
 
 ## Docker Compose
 
