@@ -25,9 +25,10 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | Tabela `wallets` (migration + constraints no banco)     | ✅ concluído |
 | Entidade de domínio `Wallet` (Aggregate Root, sem ORM)  | ✅ concluído |
 | Tabela `wager_transactions` (migration + constraints no banco) | ✅ concluído |
-| Entidade de domínio `WagerTransaction`                  | ⏳ próximo   |
+| Entidade de domínio `WagerTransaction` (máquina de estados, sem ORM) | ✅ concluído |
+| Tabela `wallet_ledger_entries` (migration + constraints no banco) | ⏳ próximo   |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem dois blocos de construção, `Money` (`src/domain/money.ts`) e `Wallet` (`src/domain/wallet.ts`, Aggregate Root com `open`/`rehydrate`/`debit`/`credit`), mas nenhum dos dois ainda é consumido por nenhuma rota ou fila — são classes de domínio puras (sem ORM, sem banco), exercidas apenas pela própria suíte de testes unitários. As tabelas `wallets` e `wager_transactions` já existem no banco, com as garantias de unicidade, integridade referencial e formato aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`/FK) — `wager_transactions` inclui a constraint de idempotência (`UNIQUE (idempotency_key)`), a unicidade de referência externa (`UNIQUE (provider_id, external_transaction_id)`), FKs para `wallets` e para si mesma (`ON DELETE RESTRICT`) e `CHECK`s fechados de `kind`/`status` — mas ainda não há nenhuma entidade MikroORM nem rota que leia ou escreva nenhuma das duas tabelas; ambas só são exercidas hoje pelos testes de integração das próprias migrations.
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem três blocos de construção — `Money` (`src/domain/money.ts`), `Wallet` (`src/domain/wallet.ts`, Aggregate Root com `open`/`rehydrate`/`debit`/`credit`) e `WagerTransaction` (`src/domain/wager-transaction.ts`, com a máquina de estados `PENDING`/`PENDING_REFERENCE`/`PROCESSED`/`REJECTED`/`FAILED`, `create`/`createOpening`/`rehydrate` e as consultas `affectsBalance`/`requiresReference`/`matchesPayload`/`ledgerDirectionFor`) —, mas nenhum dos três ainda é consumido por nenhuma rota ou fila — são classes de domínio puras (sem ORM, sem banco), exercidas apenas pela própria suíte de testes unitários. As tabelas `wallets` e `wager_transactions` já existem no banco, com as garantias de unicidade, integridade referencial e formato aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`/FK) — `wager_transactions` inclui a constraint de idempotência (`UNIQUE (idempotency_key)`), a unicidade de referência externa (`UNIQUE (provider_id, external_transaction_id)`), FKs para `wallets` e para si mesma (`ON DELETE RESTRICT`) e `CHECK`s fechados de `kind`/`status` — mas ainda não há nenhuma entidade MikroORM nem rota que leia ou escreva nenhuma das duas tabelas; ambas só são exercidas hoje pelos testes de integração das próprias migrations.
 
 ## Endpoints
 
@@ -115,7 +116,8 @@ scripts/
 src/
 ├── domain/           # entidades e regras de negócio — nunca importa NestJS/ORM
 │   ├── money.ts       # Money: value object imutável de quantia monetária (decimal.js, nunca number)
-│   └── wallet.ts      # Wallet: Aggregate Root (open/rehydrate/debit/credit), sem ORM
+│   ├── wallet.ts      # Wallet: Aggregate Root (open/rehydrate/debit/credit), sem ORM
+│   └── wager-transaction.ts   # WagerTransaction: máquina de estados (create/createOpening/rehydrate), sem ORM
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
 ├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
