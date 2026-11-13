@@ -1198,6 +1198,480 @@ describe("POST /wagering/transactions - REFUND sem referência no payload", () =
   });
 });
 
+describe("POST /wagering/transactions - ROLLBACK credita de volta (reverte BET)", () => {
+  test("a ROLLBACK referencing a PROCESSED BET of the same provider, player, wallet, currency and round with the exact same amount credits the wallet back, persists one CREDIT wallet_ledger_entries row and reference_transaction_id pointing to the BET", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      const bet = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: betExternalId,
+          money: { amount: "25.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+      expect(bet.body.balance).toEqual({ amount: "975.00", currency: "BRL" });
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(201);
+      expect(rollback.body.status).toBe("PROCESSED");
+      expect(rollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+
+      const rows = await connection.execute<{ reference_transaction_id: string; direction: string }[]>(
+        `select wt.reference_transaction_id, wle.direction
+         from wager_transactions wt
+         join wallet_ledger_entries wle on wle.transaction_id = wt.id
+         where wt.id = ?`,
+        [rollback.body.transactionId],
+      );
+      expect(rows[0]?.reference_transaction_id).toBe(bet.body.transactionId ?? null);
+      expect(rows[0]?.direction).toBe("CREDIT");
+      expect(await countWhere("wallet_ledger_entries", "transaction_id", rollback.body.transactionId as string)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK debita de volta (reverte WIN)", () => {
+  test("a ROLLBACK referencing a PROCESSED WIN of the same provider, player, wallet, currency and round, with enough balance for the reverse debit, debits the wallet, persists one DEBIT wallet_ledger_entries row and reference_transaction_id pointing to the WIN", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const winExternalId = randomUUID();
+      const win = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: winExternalId,
+          kind: "WIN",
+          money: { amount: "50.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(win.status).toBe(201);
+      expect(win.body.balance).toEqual({ amount: "1050.00", currency: "BRL" });
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "50.00", currency: "BRL" },
+          referenceExternalTransactionId: winExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(201);
+      expect(rollback.body.status).toBe("PROCESSED");
+      expect(rollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+
+      const rows = await connection.execute<{ reference_transaction_id: string; direction: string }[]>(
+        `select wt.reference_transaction_id, wle.direction
+         from wager_transactions wt
+         join wallet_ledger_entries wle on wle.transaction_id = wt.id
+         where wt.id = ?`,
+        [rollback.body.transactionId],
+      );
+      expect(rows[0]?.reference_transaction_id).toBe(win.body.transactionId ?? null);
+      expect(rows[0]?.direction).toBe("DEBIT");
+      expect(await countWhere("wallet_ledger_entries", "transaction_id", rollback.body.transactionId as string)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK de WIN levaria saldo a negativo", () => {
+  test("a ROLLBACK referencing a PROCESSED WIN whose reverse debit exceeds the current balance is rejected with 422 REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE, balance and ledger untouched", async () => {
+    const walletId = await insertWallet("10.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const winExternalId = randomUUID();
+      const win = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: winExternalId,
+          kind: "WIN",
+          money: { amount: "50.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(win.status).toBe(201);
+      expect(win.body.balance).toEqual({ amount: "60.00", currency: "BRL" });
+
+      // Esvazia quase todo o saldo depois do WIN, deixando so 5.00 - menor que os 50.00 que o
+      // ROLLBACK precisaria debitar de volta.
+      const bet = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          money: { amount: "55.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+      expect(bet.body.balance).toEqual({ amount: "5.00", currency: "BRL" });
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "50.00", currency: "BRL" },
+          referenceExternalTransactionId: winExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(422);
+      expect(rollback.body.status).toBe("REJECTED");
+      expect(rollback.body.failureCode).toBe("REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE");
+      expect(rollback.body.balance).toEqual({ amount: "5.00", currency: "BRL" });
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(2);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - BET sem saldo", () => {
+  test("a BET with insufficient wallet balance is rejected with 422 INSUFFICIENT_FUNDS, distinct from a ROLLBACK's REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE", async () => {
+    const walletId = await insertWallet("10.00");
+    try {
+      const bet = await postBet(
+        betPayload(walletId, { money: { amount: "20.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(bet.status).toBe(422);
+      expect(bet.body.status).toBe("REJECTED");
+      expect(bet.body.failureCode).toBe("INSUFFICIENT_FUNDS");
+      expect(bet.body.balance).toEqual({ amount: "10.00", currency: "BRL" });
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - segundo ROLLBACK sobre a mesma referência", () => {
+  test("a second ROLLBACK over the same reference is rejected with 422 REFERENCE_ALREADY_REVERSED without applying the effect again", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: betExternalId,
+          money: { amount: "25.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      const firstRollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(firstRollback.status).toBe(201);
+
+      const secondRollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(secondRollback.status).toBe(422);
+      expect(secondRollback.body.status).toBe("REJECTED");
+      expect(secondRollback.body.failureCode).toBe("REFERENCE_ALREADY_REVERSED");
+      expect(secondRollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(2);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK referenciando LOSS", () => {
+  test("a ROLLBACK referencing a LOSS is rejected with 422 REFERENCE_MISMATCH without applying any effect", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const lossExternalId = randomUUID();
+      const loss = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: lossExternalId,
+          kind: "LOSS",
+          money: { amount: "10.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(loss.status).toBe(201);
+      expect(loss.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "10.00", currency: "BRL" },
+          referenceExternalTransactionId: lossExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(422);
+      expect(rollback.body.status).toBe("REJECTED");
+      expect(rollback.body.failureCode).toBe("REFERENCE_MISMATCH");
+      expect(rollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(0);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK com valor divergente", () => {
+  test("a ROLLBACK with a money.amount different from the referenced transaction is rejected with 422 REFERENCE_AMOUNT_MISMATCH without applying any effect", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: betExternalId,
+          money: { amount: "25.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "30.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(422);
+      expect(rollback.body.status).toBe("REJECTED");
+      expect(rollback.body.failureCode).toBe("REFERENCE_AMOUNT_MISMATCH");
+      expect(rollback.body.balance).toEqual({ amount: "975.00", currency: "BRL" });
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK referenciando transação rejeitada", () => {
+  test("a ROLLBACK referencing a transaction that already ended REJECTED is rejected with 422 REFERENCE_NOT_FOUND without waiting as PENDING_REFERENCE", async () => {
+    const walletId = await insertWallet("10.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const rejectedExternalId = randomUUID();
+      const rejectedBet = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: rejectedExternalId,
+          money: { amount: "20.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(rejectedBet.status).toBe(422);
+      expect(rejectedBet.body.status).toBe("REJECTED");
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "20.00", currency: "BRL" },
+          referenceExternalTransactionId: rejectedExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(422);
+      expect(rollback.body.status).toBe("REJECTED");
+      expect(rollback.body.failureCode).toBe("REFERENCE_NOT_FOUND");
+      expect(rollback.body.balance).toEqual({ amount: "10.00", currency: "BRL" });
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK com referência inexistente", () => {
+  test("a ROLLBACK referencing an externalTransactionId that does not exist yet returns 202 Accepted with status PENDING_REFERENCE, without applying any effect", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const rollback = await postBet(
+        betPayload(walletId, {
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: randomUUID(),
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(202);
+      expect(rollback.body.status).toBe("PENDING_REFERENCE");
+      expect(rollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(0);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK reverte REFUND", () => {
+  test("a ROLLBACK referencing a PROCESSED REFUND debits the wallet, persists one DEBIT wallet_ledger_entries row and reference_transaction_id pointing to the REFUND", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: betExternalId,
+          money: { amount: "25.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      const refundExternalId = randomUUID();
+      const refund = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: refundExternalId,
+          kind: "REFUND",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(refund.status).toBe(201);
+      expect(refund.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: refundExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+
+      expect(rollback.status).toBe(201);
+      expect(rollback.body.status).toBe("PROCESSED");
+      expect(rollback.body.balance).toEqual({ amount: "975.00", currency: "BRL" });
+
+      const rows = await connection.execute<{ reference_transaction_id: string; direction: string }[]>(
+        `select wt.reference_transaction_id, wle.direction
+         from wager_transactions wt
+         join wallet_ledger_entries wle on wle.transaction_id = wt.id
+         where wt.id = ?`,
+        [rollback.body.transactionId],
+      );
+      expect(rows[0]?.reference_transaction_id).toBe(refund.body.transactionId ?? null);
+      expect(rows[0]?.direction).toBe("DEBIT");
+      expect(await countWhere("wallet_ledger_entries", "transaction_id", rollback.body.transactionId as string)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - ROLLBACK sem referência no payload", () => {
+  test("POST /wagering/transactions with kind ROLLBACK and no referenceExternalTransactionId returns 400 and persists no WagerTransaction", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(betPayload(walletId, { kind: "ROLLBACK" }), `provider-a:${randomUUID()}`);
+
+      expect(status).toBe(400);
+      expect(JSON.stringify(body.message)).toContain("referenceExternalTransactionId");
+      expect(await countWhere("wager_transactions", "wallet_id", walletId)).toBe(0);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
 describe("POST /wagering/transactions - walletId inexistente", () => {
   test("POST /wagering/transactions for an unknown walletId returns 404 and persists no WagerTransaction", async () => {
     const walletId = randomUUID();
@@ -1209,24 +1683,8 @@ describe("POST /wagering/transactions - walletId inexistente", () => {
   });
 });
 
-describe("POST /wagering/transactions - kind ainda não suportado (BET/WIN/LOSS/REFUND implementados, ROLLBACK não)", () => {
-  test("POST /wagering/transactions with a kind outside BET/WIN/LOSS/REFUND but still within the domain's known kinds returns 400 identifying the unsupported kind and persists no WagerTransaction", async () => {
-    const walletId = await insertWallet("1000.00");
-    try {
-      const { status, body } = await postBet(
-        betPayload(walletId, { kind: "ROLLBACK", referenceExternalTransactionId: randomUUID() }),
-        `provider-a:${randomUUID()}`,
-      );
-
-      expect(status).toBe(400);
-      expect(JSON.stringify(body.message)).toContain("ROLLBACK");
-      expect(await countWhere("wager_transactions", "wallet_id", walletId)).toBe(0);
-    } finally {
-      await deleteWalletCascade(walletId);
-    }
-  });
-
-  test("POST /wagering/transactions with a kind outside the domain's known set also identifies the received value", async () => {
+describe("POST /wagering/transactions - kind fora do domínio", () => {
+  test("POST /wagering/transactions with a kind outside the domain's known set returns 400 identifying the unsupported kind and persists no WagerTransaction", async () => {
     const walletId = await insertWallet("1000.00");
     try {
       const { status, body } = await postBet(betPayload(walletId, { kind: "DEPOSIT" }), `provider-a:${randomUUID()}`);

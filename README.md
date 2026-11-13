@@ -10,7 +10,7 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   transação interna `OPENING` com lançamento `CREDIT` no ledger, na mesma transação SQL.
 - `GET /wallets/:walletId` — consulta saldo, moeda e versão atuais.
 - `POST /wagering/transactions` (header `Idempotency-Key` obrigatório) — processa `kind: "BET"`,
-  `"WIN"`, `"LOSS"` e `"REFUND"`:
+  `"WIN"`, `"LOSS"`, `"REFUND"` e `"ROLLBACK"`:
   - `BET`: débito do saldo com lock pessimista por `walletId`, rejeição auditável por saldo
     insuficiente (`failureCode: "INSUFFICIENT_FUNDS"`) ou por moeda divergente (`failureCode:
     "CURRENCY_MISMATCH"`).
@@ -28,10 +28,18 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     válida (`failureCode: "REFERENCE_MISMATCH"`/`"REFERENCE_NOT_FOUND"`). Quando a referência ainda
     não existe (ou ainda está em processamento), responde `202 Accepted` com `status:
     "PENDING_REFERENCE"` em vez de rejeitar — fica pendente para reprocessamento futuro.
+  - `ROLLBACK`: exige `referenceExternalTransactionId` apontando para uma `BET`, `WIN` ou
+    `REFUND` já `PROCESSED` (nunca uma `LOSS`, que não afeta saldo), com o mesmo valor exato —
+    aplica o efeito **inverso** ao da referência (credita de volta uma `BET`; debita de volta uma
+    `WIN`/`REFUND`). Rejeita (`422`) pelos mesmos motivos do `REFUND`
+    (`REFERENCE_AMOUNT_MISMATCH`, `REFERENCE_ALREADY_REVERSED`, `REFERENCE_MISMATCH`,
+    `REFERENCE_NOT_FOUND`) e, de forma própria, quando o débito reverso levaria o saldo a negativo
+    (`failureCode: "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE"`, distinto de `INSUFFICIENT_FUNDS`, que
+    é exclusivo de `BET`). Referência ainda não existente também responde `202 Accepted` com
+    `status: "PENDING_REFERENCE"`.
   - Em qualquer `kind`: replay idempotente por `Idempotency-Key` (inclusive para transações
     rejeitadas e para `PENDING_REFERENCE`), e falha transitória de infraestrutura (`failureCode:
-    "INTERNAL_ERROR"`, HTTP `503`) quando o lock da wallet não é obtido em 5s. `ROLLBACK` ainda
-    não é suportado por este endpoint.
+    "INTERNAL_ERROR"`, HTTP `503`) quando o lock da wallet não é obtido em 5s.
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
 
 ## Setup local
@@ -92,4 +100,10 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider-a:refund-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"refund-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"REFUND","money":{"amount":"25.00","currency":"BRL"},"referenceExternalTransactionId":"bet-001"}'
+
+# processa um ROLLBACK do WIN acima (debita a wallet - efeito inverso ao da WIN)
+curl -s -X POST http://localhost:3000/wagering/transactions \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: provider-a:rollback-001" \
+  -d '{"providerId":"provider-a","externalTransactionId":"rollback-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"ROLLBACK","money":{"amount":"50.00","currency":"BRL"},"referenceExternalTransactionId":"win-001"}'
 ```

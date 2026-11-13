@@ -11,7 +11,7 @@ import { Money, type MoneyProps } from "../../domain/money";
 // Kinds cuja referencia e obrigatoria - checado aqui, na borda do payload, para que a ausencia
 // vire 400 INVALID_PAYLOAD (zod) e nunca alcance WagerTransaction.create(), cujo throw
 // equivalente e so uma rede de seguranca interna (nao estende DomainError).
-const KINDS_REQUIRING_REFERENCE: ReadonlySet<string> = new Set(["REFUND"]);
+const KINDS_REQUIRING_REFERENCE: ReadonlySet<string> = new Set(["REFUND", "ROLLBACK"]);
 
 const processWagerTransactionBodySchema = z
   .object({
