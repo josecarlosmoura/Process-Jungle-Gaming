@@ -27,6 +27,10 @@ export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerT
     referenceTransactionId: entity.referenceTransactionId ?? undefined,
     failureCode: entity.failureCode ?? undefined,
     processedAt: entity.processedAt ?? undefined,
+    balanceAfterProcessing:
+      entity.balanceAfterAmount != null && entity.balanceAfterCurrency != null
+        ? Money.from({ amount: entity.balanceAfterAmount, currency: entity.balanceAfterCurrency })
+        : undefined,
   });
 }
 
@@ -47,6 +51,8 @@ export function wagerTransactionToEntityData(transaction: WagerTransaction): Req
     | "referenceTransactionId"
     | "failureCode"
     | "processedAt"
+    | "balanceAfterAmount"
+    | "balanceAfterCurrency"
   > {
   return {
     id: transaction.id,
@@ -67,6 +73,8 @@ export function wagerTransactionToEntityData(transaction: WagerTransaction): Req
     failureCode: transaction.failureCode,
     createdAt: transaction.createdAt,
     processedAt: transaction.processedAt,
+    balanceAfterAmount: transaction.balanceAfterProcessing?.toJSON().amount,
+    balanceAfterCurrency: transaction.balanceAfterProcessing?.toJSON().currency,
   };
 }
 

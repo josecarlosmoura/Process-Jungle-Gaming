@@ -141,7 +141,7 @@ afterAll(async () => {
 });
 
 describe("wager_transactions table schema (migration:up)", () => {
-  test("migration:up creates the wager_transactions table with exactly the expected 18 columns", async () => {
+  test("migration:up creates the wager_transactions table with exactly the expected 20 columns", async () => {
     ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
@@ -167,6 +167,10 @@ describe("wager_transactions table schema (migration:up)", () => {
         "failure_code",
         "created_at",
         "processed_at",
+        // balance_after_amount/balance_after_currency: snapshot do saldo no processamento, so
+        // preenchido para transacoes PROCESSED sem WalletLedgerEntry (hoje, so LOSS) - AD-006.
+        "balance_after_amount",
+        "balance_after_currency",
       ].sort(),
     );
 
@@ -235,6 +239,8 @@ describe("wager_transactions table schema (migration:up)", () => {
       "reference_transaction_id",
       "failure_code",
       "processed_at",
+      "balance_after_amount",
+      "balance_after_currency",
     ];
 
     for (const name of notNullable) {

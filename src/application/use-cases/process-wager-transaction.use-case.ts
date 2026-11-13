@@ -3,8 +3,8 @@ import { Inject, Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { CurrencyMismatchError, type Money, type MoneyProps } from "../../domain/money";
-import { InsufficientFundsError, WalletNotFoundError } from "../../domain/wallet";
-import { WagerTransaction, type WagerTransactionStatus } from "../../domain/wager-transaction";
+import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
+import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
 import type { WalletRepository } from "../ports/wallet.repository";
 import { WALLET_REPOSITORY_INTERFACE } from "../ports/wallet.repository";
@@ -54,6 +54,8 @@ export class LockAcquisitionTimeoutError extends Error {
 // constraints, 42xxx sintaxe), entao a deteccao e pelo .code bruto preservado em DriverException.
 const LOCK_NOT_AVAILABLE_SQLSTATE = "55P03";
 
+const SUPPORTED_KINDS: ReadonlySet<string> = new Set(["BET", "WIN", "LOSS"]);
+
 @Injectable()
 export class ProcessWagerTransactionUseCase {
   constructor(
@@ -66,10 +68,10 @@ export class ProcessWagerTransactionUseCase {
   ) {}
 
   async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
-    // Restricao temporaria desta tarefa (T111/T204/T205 removem conforme os demais kinds
-    // ganham suporte) - mora aqui, nao no controller, para nao espalhar logica de negocio
-    // sobre kind pela camada de apresentacao.
-    if (command.kind !== "BET") {
+    // Restricao temporaria desta tarefa (T204/T205 removem conforme REFUND/ROLLBACK ganham
+    // suporte) - mora aqui, nao no controller, para nao espalhar logica de negocio sobre kind
+    // pela camada de apresentacao.
+    if (!SUPPORTED_KINDS.has(command.kind)) {
       throw new UnsupportedWagerTransactionKindError(command.kind);
     }
     try {
@@ -109,9 +111,10 @@ export class ProcessWagerTransactionUseCase {
       throw new WalletNotFoundError(command.walletId);
     }
 
-    // command.kind so chega aqui como "BET" - execute() ja rejeitou qualquer outro valor antes
-    // de abrir a transacao.
-    const payloadHash = computeWagerTransactionPayloadHash({ ...command, kind: "BET" });
+    // command.kind so chega aqui dentro de SUPPORTED_KINDS - execute() ja rejeitou qualquer
+    // outro valor antes de abrir a transacao.
+    const kind = command.kind as WagerTransactionKind;
+    const payloadHash = computeWagerTransactionPayloadHash({ ...command, kind });
     const transaction = WagerTransaction.create({
       id: randomUUID(),
       providerId: command.providerId,
@@ -122,14 +125,82 @@ export class ProcessWagerTransactionUseCase {
       playerId: command.playerId,
       roundId: command.roundId,
       gameId: command.gameId,
-      kind: "BET",
+      kind,
       money: command.money,
       referenceExternalTransactionId: command.referenceExternalTransactionId,
     });
 
+    if (!transaction.affectsBalance()) {
+      return this.processWithoutBalanceEffect(transaction, wallet);
+    }
+    return this.processWithBalanceEffect(transaction, wallet, command);
+  }
+
+  // RN-24/AD-005: LOSS nunca chama wallet.credit/debit, entao a consistencia de moeda (garantida
+  // de graca para BET/WIN pelo proprio debit/credit) precisa de uma checagem explicita aqui -
+  // via Wallet.hasCurrency, a mesma fonte que debit/credit usam internamente.
+  private async processWithoutBalanceEffect(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+  ): Promise<ProcessWagerTransactionResult> {
+    if (!wallet.hasCurrency(transaction.money.currency)) {
+      transaction.reject("CURRENCY_MISMATCH");
+      await this.wagerTransactionRepository.save(transaction);
+      return {
+        transactionId: transaction.id,
+        status: transaction.status,
+        failureCode: transaction.failureCode,
+        balance: wallet.balance.toJSON(),
+        idempotentReplay: false,
+      };
+    }
+
+    // Snapshot do saldo no momento do processamento: LOSS nunca ganha um WalletLedgerEntry, que
+    // e a unica outra fonte de "saldo congelado naquele momento" que toReplayResult usa para
+    // BET/WIN - sem isso, um replay depois de outra transacao mover o saldo devolveria o saldo
+    // atual (errado), nao o observado originalmente.
+    transaction.markProcessed(undefined, new Date(), wallet.balance);
+    await this.wagerTransactionRepository.save(transaction);
+    return {
+      transactionId: transaction.id,
+      status: transaction.status,
+      balance: wallet.balance.toJSON(),
+      idempotentReplay: false,
+    };
+  }
+
+  private async processWithBalanceEffect(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    command: ProcessWagerTransactionCommand,
+  ): Promise<ProcessWagerTransactionResult> {
+    let referenceTransactionId: string | undefined;
+    if (transaction.kind === "WIN" && command.referenceExternalTransactionId) {
+      const reference = await this.wagerTransactionRepository.findByProviderAndExternalId(
+        command.providerId,
+        command.referenceExternalTransactionId,
+      );
+      if (!this.isValidWinReference(reference, command)) {
+        transaction.reject("REFERENCE_MISMATCH");
+        await this.wagerTransactionRepository.save(transaction);
+        return {
+          transactionId: transaction.id,
+          status: transaction.status,
+          failureCode: transaction.failureCode,
+          balance: wallet.balance.toJSON(),
+          idempotentReplay: false,
+        };
+      }
+      referenceTransactionId = reference?.id;
+    }
+
     const balanceBefore = wallet.balance;
     try {
-      wallet.debit(command.money);
+      if (transaction.kind === "BET") {
+        wallet.debit(command.money);
+      } else {
+        wallet.credit(command.money);
+      }
     } catch (error) {
       if (error instanceof CurrencyMismatchError) {
         transaction.reject("CURRENCY_MISMATCH");
@@ -148,7 +219,7 @@ export class ProcessWagerTransactionUseCase {
       };
     }
 
-    transaction.markProcessed(undefined, new Date());
+    transaction.markProcessed(referenceTransactionId, new Date());
     const ledgerEntry = WalletLedgerEntry.create({
       id: randomUUID(),
       walletId: wallet.id,
@@ -173,13 +244,41 @@ export class ProcessWagerTransactionUseCase {
     };
   }
 
+  // AD-004: referencia opcional de WIN - precisa ser uma BET PROCESSED do mesmo agrupamento;
+  // qualquer divergencia (incluindo "nao encontrada") e invalida, nunca ignorada em silencio.
+  private isValidWinReference(reference: WagerTransaction | null, command: ProcessWagerTransactionCommand): boolean {
+    if (!reference) {
+      return false;
+    }
+    return (
+      reference.kind === "BET" &&
+      reference.status === "PROCESSED" &&
+      reference.providerId === command.providerId &&
+      reference.playerId === command.playerId &&
+      reference.walletId === command.walletId &&
+      reference.roundId === command.roundId &&
+      reference.money.currency === command.money.currency
+    );
+  }
+
   private async toReplayResult(transaction: WagerTransaction): Promise<ProcessWagerTransactionResult> {
     if (transaction.status === "PROCESSED") {
       const ledgerEntry = await this.walletLedgerEntryRepository.findByTransactionId(transaction.id);
+      if (ledgerEntry) {
+        return {
+          transactionId: transaction.id,
+          status: transaction.status,
+          balance: ledgerEntry.balanceAfter.toJSON(),
+          idempotentReplay: true,
+        };
+      }
+      // LOSS PROCESSED nunca gera ledger entry (RN-24) - o saldo observado naquele momento vem
+      // do snapshot gravado por markProcessed(), nunca do saldo atual da wallet (que pode ja ter
+      // sido alterado por outra transacao entre o processamento original e este replay).
       return {
         transactionId: transaction.id,
         status: transaction.status,
-        balance: ledgerEntry?.balanceAfter.toJSON(),
+        balance: transaction.balanceAfterProcessing?.toJSON(),
         idempotentReplay: true,
       };
     }

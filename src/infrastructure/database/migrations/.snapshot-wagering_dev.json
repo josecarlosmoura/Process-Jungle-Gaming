@@ -333,6 +333,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "balance_after_amount": {
+          "name": "balance_after_amount",
+          "type": "numeric(19,2)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 19,
+          "scale": 2,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "balance_after_currency": {
+          "name": "balance_after_currency",
+          "type": "char(3)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 3,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "character"
         }
       },
       "name": "wager_transactions",
@@ -383,6 +415,18 @@
       ],
       "checks": [
         {
+          "name": "wager_transactions_balance_after_currency_format",
+          "columnName": "balance_after_currency",
+          "definition": "CHECK ((balance_after_currency ~ '^[A-Z]{3}$'::text))",
+          "expression": "balance_after_currency ~ '^[A-Z]{3}$'::text"
+        },
+        {
+          "name": "wager_transactions_balance_after_pair_check",
+          "columnName": "balance_after_amount",
+          "definition": "CHECK (((balance_after_amount IS NULL) = (balance_after_currency IS NULL)))",
+          "expression": "(balance_after_amount IS NULL) = (balance_after_currency IS NULL)"
+        },
+        {
           "name": "wager_transactions_money_currency_format",
           "columnName": "money_currency",
           "definition": "CHECK ((money_currency ~ '^[A-Z]{3}$'::text))",
@@ -390,7 +434,7 @@
         },
         {
           "name": "wager_transactions_opening_fields_null_check",
-          "columnName": "payload_hash",
+          "columnName": "kind",
           "definition": "CHECK ((((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))))",
           "expression": "((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))"
         }
@@ -604,7 +648,7 @@
       "checks": [
         {
           "name": "wallet_ledger_entries_balance_arithmetic_check",
-          "columnName": "direction",
+          "columnName": "balance_after_amount",
           "definition": "CHECK ((((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))))",
           "expression": "((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))"
         },

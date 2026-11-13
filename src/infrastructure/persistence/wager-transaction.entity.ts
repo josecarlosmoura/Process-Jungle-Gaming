@@ -59,4 +59,12 @@ export class WagerTransactionEntity {
 
   @Property({ fieldName: "processed_at", nullable: true })
   processedAt?: Date;
+
+  // Snapshot do saldo no momento do processamento - so preenchido para kinds sem efeito de
+  // saldo (hoje, so LOSS), que nunca ganham um WalletLedgerEntry para congelar esse valor.
+  @Property({ fieldName: "balance_after_amount", type: "string", columnType: "numeric(19,2)", nullable: true })
+  balanceAfterAmount?: string;
+
+  @Property({ fieldName: "balance_after_currency", type: "string", length: 3, nullable: true })
+  balanceAfterCurrency?: string;
 }

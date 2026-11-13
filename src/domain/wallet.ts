@@ -67,6 +67,10 @@ export class Wallet {
     return this._balance.currency;
   }
 
+  hasCurrency(currency: string): boolean {
+    return this._balance.currency === currency;
+  }
+
   get createdAt(): Date {
     return this._createdAt;
   }
@@ -101,7 +105,7 @@ export class Wallet {
   }
 
   private assertSameCurrency(money: Money): void {
-    if (this.currency !== money.currency) {
+    if (!this.hasCurrency(money.currency)) {
       throw new CurrencyMismatchError(this.currency, money.currency);
     }
   }

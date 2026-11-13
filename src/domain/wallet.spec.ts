@@ -115,6 +115,24 @@ describe("Wallet", () => {
     expect(wallet.updatedAt).toBe(updatedAtBefore);
   });
 
+  test("hasCurrency returns true for the wallet's own currency and false for any other, without mutating balance, version or updatedAt", () => {
+    const wallet = Wallet.open({
+      id: "wallet-1",
+      playerId: "player-1",
+      initialBalance: Money.from({ amount: "100.00", currency: "BRL" }),
+    });
+    const balanceBefore = wallet.balance;
+    const versionBefore = wallet.version;
+    const updatedAtBefore = wallet.updatedAt;
+
+    expect(wallet.hasCurrency("BRL")).toBe(true);
+    expect(wallet.hasCurrency("USD")).toBe(false);
+
+    expect(wallet.balance.toJSON()).toEqual(balanceBefore.toJSON());
+    expect(wallet.version).toBe(versionBefore);
+    expect(wallet.updatedAt).toBe(updatedAtBefore);
+  });
+
   test("rehydrate reconstructs the exact state passed, without throwing", () => {
     const state: WalletState = {
       id: "wallet-1",

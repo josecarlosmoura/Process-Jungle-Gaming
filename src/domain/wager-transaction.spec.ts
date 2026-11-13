@@ -149,6 +149,17 @@ describe("WagerTransaction", () => {
     expect(transaction.processedAt).toEqual(at);
   });
 
+  test("markProcessed without a balanceAfterProcessing leaves it undefined, and with one records it exactly", () => {
+    const withoutSnapshot = WagerTransaction.create(buildProps({ kind: "BET" }));
+    withoutSnapshot.markProcessed(undefined, new Date());
+    expect(withoutSnapshot.balanceAfterProcessing).toBeUndefined();
+
+    const withSnapshot = WagerTransaction.create(buildProps({ kind: "LOSS" }));
+    const balance = Money.from({ amount: "1000.00", currency: "BRL" });
+    withSnapshot.markProcessed(undefined, new Date(), balance);
+    expect(withSnapshot.balanceAfterProcessing).toBe(balance);
+  });
+
   test("reject over a PENDING transaction moves it to REJECTED and records the failureCode", () => {
     const transaction = WagerTransaction.create(buildProps({ kind: "BET" }));
 
@@ -352,6 +363,7 @@ describe("WagerTransaction", () => {
       referenceTransactionId: "resolved-tx-1",
       failureCode: "SOME_CODE",
       processedAt: new Date("2026-01-01T00:05:00.000Z"),
+      balanceAfterProcessing: Money.from({ amount: "1000.00", currency: "BRL" }),
     };
 
     const transaction = WagerTransaction.rehydrate(state);
@@ -373,6 +385,7 @@ describe("WagerTransaction", () => {
     expect(transaction.referenceTransactionId).toBe(state.referenceTransactionId);
     expect(transaction.failureCode).toBe(state.failureCode);
     expect(transaction.processedAt).toEqual(state.processedAt);
+    expect(transaction.balanceAfterProcessing).toBe(state.balanceAfterProcessing);
   });
 
   test("rehydrate reconstructs a state that would violate create's invariants, without throwing any validation error", () => {

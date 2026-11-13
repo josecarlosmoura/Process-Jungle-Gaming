@@ -52,6 +52,7 @@ export interface WagerTransactionState {
   referenceTransactionId?: string;
   failureCode?: FailureCode;
   processedAt?: Date;
+  balanceAfterProcessing?: Money;
 }
 
 const KINDS_REQUIRING_REFERENCE: ReadonlySet<WagerTransactionKind> = new Set(["REFUND", "ROLLBACK"]);
@@ -96,6 +97,10 @@ export class WagerTransaction {
     private _referenceTransactionId?: string,
     private _failureCode?: FailureCode,
     private _processedAt?: Date,
+    // Só populado por markProcessed() quando affectsBalance() e false (hoje, so LOSS) - esses
+    // kinds nunca ganham um WalletLedgerEntry, entao nao ha outro lugar que congele o saldo
+    // observado no momento do processamento para um replay futuro.
+    private _balanceAfterProcessing?: Money,
   ) {}
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
@@ -165,6 +170,7 @@ export class WagerTransaction {
       state.referenceTransactionId,
       state.failureCode,
       state.processedAt,
+      state.balanceAfterProcessing,
     );
   }
 
@@ -184,11 +190,16 @@ export class WagerTransaction {
     return this._processedAt;
   }
 
-  markProcessed(referenceTransactionId: string | undefined, at: Date): void {
+  get balanceAfterProcessing(): Money | undefined {
+    return this._balanceAfterProcessing;
+  }
+
+  markProcessed(referenceTransactionId: string | undefined, at: Date, balanceAfterProcessing?: Money): void {
     this.assertTransitionAllowed("markProcessed", ["PENDING", "PENDING_REFERENCE"]);
     this._status = "PROCESSED";
     this._referenceTransactionId = referenceTransactionId;
     this._processedAt = at;
+    this._balanceAfterProcessing = balanceAfterProcessing;
   }
 
   markPendingReference(): void {
