@@ -265,7 +265,15 @@ describe("WalletLedgerEntryMikroOrmRepository - paginação por cursor", () => {
       await makeRepo().save(entry);
 
       const cursor = encodeLedgerCursor(entry, cursorSecret);
-      const tamperedCursor = `${cursor.slice(0, -1)}${cursor.endsWith("A") ? "B" : "A"}`;
+      const [payload, signature] = cursor.split(".") as [string, string];
+      // XOR no primeiro byte decodificado, não no último caractere da string: o último
+      // caractere de uma assinatura HMAC-SHA256 em base64url carrega bits de padding ignorados
+      // na decodificação - trocar só ele por sorteio (ex.: entre "A" e "B") às vezes decodifica
+      // para o mesmo byte e deixa a assinatura "adulterada" batendo com a esperada. Invertendo
+      // todos os bits de um byte real do buffer, a diferença é garantida.
+      const tamperedSignatureBytes = Buffer.from(signature, "base64url");
+      tamperedSignatureBytes[0] = tamperedSignatureBytes[0] ^ 0xff;
+      const tamperedCursor = `${payload}.${tamperedSignatureBytes.toString("base64url")}`;
 
       await expect(makeRepo().findByWalletId(walletId, { cursor: tamperedCursor, limit: 2 })).rejects.toThrow(
         InvalidLedgerCursorError,
