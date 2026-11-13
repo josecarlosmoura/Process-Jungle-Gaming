@@ -85,6 +85,20 @@ async function countWhere(table: string, column: string, value: string): Promise
   return Number(rows[0]?.count ?? 0);
 }
 
+interface PendingReferenceMetadata {
+  attempts: number | null;
+  nextAttemptAt: Date | null;
+}
+
+async function pendingReferenceMetadataFor(transactionId: string): Promise<PendingReferenceMetadata> {
+  const rows = await connection.execute<{ attempts: number | null; next_attempt_at: Date | null }[]>(
+    "select attempts, next_attempt_at from wager_transactions where id = ?",
+    [transactionId],
+  );
+  const row = rows[0];
+  return { attempts: row?.attempts ?? null, nextAttemptAt: row?.next_attempt_at ?? null };
+}
+
 interface MoneyBody {
   amount: string;
   currency: string;
@@ -1097,9 +1111,10 @@ describe("POST /wagering/transactions - REFUND referenciando outro player", () =
 });
 
 describe("POST /wagering/transactions - REFUND com referência inexistente", () => {
-  test("a REFUND referencing an externalTransactionId that does not exist yet returns 202 Accepted with status PENDING_REFERENCE, without crediting", async () => {
+  test("a REFUND referencing an externalTransactionId that does not exist yet returns 202 Accepted with status PENDING_REFERENCE, attempts 0 and next_attempt_at in the near future, without crediting", async () => {
     const walletId = await insertWallet("1000.00");
     try {
+      const beforeSubmit = Date.now();
       const refund = await postBet(
         betPayload(walletId, {
           kind: "REFUND",
@@ -1113,6 +1128,11 @@ describe("POST /wagering/transactions - REFUND com referência inexistente", () 
       expect(refund.body.status).toBe("PENDING_REFERENCE");
       expect(refund.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
       expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(0);
+
+      const metadata = await pendingReferenceMetadataFor(refund.body.transactionId as string);
+      expect(metadata.attempts).toBe(0);
+      expect(metadata.nextAttemptAt).not.toBeNull();
+      expect((metadata.nextAttemptAt as Date).getTime()).toBeGreaterThan(beforeSubmit);
     } finally {
       await deleteWalletCascade(walletId);
     }
@@ -1177,6 +1197,31 @@ describe("POST /wagering/transactions - replay de REFUND PENDING_REFERENCE", () 
       expect(replay.body.transactionId).toBe(first.body.transactionId);
       expect(replay.body.idempotentReplay).toBe(true);
       expect(replay.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("replaying a REFUND still PENDING_REFERENCE with the same Idempotency-Key keeps attempts and next_attempt_at unchanged, without creating a second attempt", async () => {
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const refundPayload = betPayload(walletId, {
+      kind: "REFUND",
+      money: { amount: "25.00", currency: "BRL" },
+      referenceExternalTransactionId: randomUUID(),
+    });
+    try {
+      const first = await postBet(refundPayload, idempotencyKey);
+      const transactionId = first.body.transactionId as string;
+      const original = await pendingReferenceMetadataFor(transactionId);
+
+      const replay = await postBet(refundPayload, idempotencyKey);
+
+      expect(replay.status).toBe(202);
+      expect(replay.body.idempotentReplay).toBe(true);
+      const afterReplay = await pendingReferenceMetadataFor(transactionId);
+      expect(afterReplay.attempts).toBe(original.attempts);
+      expect(afterReplay.nextAttemptAt).toEqual(original.nextAttemptAt);
     } finally {
       await deleteWalletCascade(walletId);
     }
@@ -1568,9 +1613,10 @@ describe("POST /wagering/transactions - ROLLBACK referenciando transação rejei
 });
 
 describe("POST /wagering/transactions - ROLLBACK com referência inexistente", () => {
-  test("a ROLLBACK referencing an externalTransactionId that does not exist yet returns 202 Accepted with status PENDING_REFERENCE, without applying any effect", async () => {
+  test("a ROLLBACK referencing an externalTransactionId that does not exist yet returns 202 Accepted with status PENDING_REFERENCE, attempts 0 and next_attempt_at in the near future, without applying any effect", async () => {
     const walletId = await insertWallet("1000.00");
     try {
+      const beforeSubmit = Date.now();
       const rollback = await postBet(
         betPayload(walletId, {
           kind: "ROLLBACK",
@@ -1584,6 +1630,11 @@ describe("POST /wagering/transactions - ROLLBACK com referência inexistente", (
       expect(rollback.body.status).toBe("PENDING_REFERENCE");
       expect(rollback.body.balance).toEqual({ amount: "1000.00", currency: "BRL" });
       expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(0);
+
+      const metadata = await pendingReferenceMetadataFor(rollback.body.transactionId as string);
+      expect(metadata.attempts).toBe(0);
+      expect(metadata.nextAttemptAt).not.toBeNull();
+      expect((metadata.nextAttemptAt as Date).getTime()).toBeGreaterThan(beforeSubmit);
     } finally {
       await deleteWalletCascade(walletId);
     }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { PayloadValidationError, ResourceConflictError, TransientInfrastructureError } from "../../domain/domain-error";
@@ -72,6 +72,8 @@ const ROLLBACK_REFERENCEABLE_KINDS: ReadonlySet<WagerTransactionKind> = new Set(
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
+  private readonly logger = new Logger(ProcessWagerTransactionUseCase.name);
+
   constructor(
     private readonly em: EntityManager,
     @Inject(WALLET_REPOSITORY_INTERFACE) private readonly walletRepository: WalletRepository,
@@ -300,8 +302,9 @@ export class ProcessWagerTransactionUseCase {
       // A referencia obrigatoria de um REFUND ainda pode se resolver depois (worker de
       // reprocessamento), entao nunca rejeita de imediato so por ainda nao existir - diferente da
       // referencia opcional de WIN, que rejeita qualquer outcome que nao seja RESOLVED.
-      transaction.markPendingReference();
+      transaction.markPendingReference(new Date());
       await this.wagerTransactionRepository.save(transaction);
+      this.publishPendingReferenceStub(transaction);
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -399,8 +402,9 @@ export class ProcessWagerTransactionUseCase {
     if (resolution.outcome === "NOT_FOUND") {
       // Mesmo caminho de REFUND: a referencia obrigatoria ainda pode se resolver depois (worker
       // de reprocessamento), nunca rejeita de imediato so por ainda nao existir.
-      transaction.markPendingReference();
+      transaction.markPendingReference(new Date());
       await this.wagerTransactionRepository.save(transaction);
+      this.publishPendingReferenceStub(transaction);
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -486,6 +490,23 @@ export class ProcessWagerTransactionUseCase {
       balance: wallet.balance.toJSON(),
       idempotentReplay: false,
     };
+  }
+
+  // TODO: stub de publicacao do evento WagerTransactionPendingReference - a outbox real
+  // (insercao de outbox_message na mesma transacao SQL) ainda nao existe neste codebase; ate
+  // la, um log estruturado marca o ponto de extensao a substituir quando a outbox for
+  // implementada. Chamado so no caminho que de fato transiciona para PENDING_REFERENCE pela
+  // primeira vez (nunca no replay, que nao chama markPendingReference de novo), entao nunca
+  // duplica a "publicacao" para a mesma transacao.
+  private publishPendingReferenceStub(transaction: WagerTransaction): void {
+    this.logger.log({
+      event: "WagerTransactionPendingReference",
+      transactionId: transaction.id,
+      walletId: transaction.walletId,
+      kind: transaction.kind,
+      attempts: transaction.attempts,
+      nextAttemptAt: transaction.nextAttemptAt,
+    });
   }
 
   // A mesma Idempotency-Key com o mesmo payloadHash e replay (devolve o resultado original, sem

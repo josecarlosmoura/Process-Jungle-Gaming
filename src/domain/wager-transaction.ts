@@ -54,6 +54,10 @@ export interface WagerTransactionState {
   failureCode?: FailureCode;
   processedAt?: Date;
   balanceAfterProcessing?: Money;
+  // Ausentes (undefined) exatamente para uma transacao que nunca entrou em PENDING_REFERENCE -
+  // metadados de reprocessamento que markPendingReference() grava, nunca aceitos via payload.
+  attempts?: number;
+  nextAttemptAt?: Date;
 }
 
 const KINDS_REQUIRING_REFERENCE: ReadonlySet<WagerTransactionKind> = new Set(["REFUND", "ROLLBACK"]);
@@ -80,6 +84,11 @@ export class LedgerDirectionNotApplicableError extends Error {
 }
 
 export class WagerTransaction {
+  // Primeiro passo do backoff exponencial de ARCHITECTURE.md secao 8 ("ex.: 1min, 2min, 4min...
+  // ate 30min") - so o valor inicial, gravado ao entrar em PENDING_REFERENCE; a progressao
+  // completa e o limite de tentativas/TTL sao do worker de reprocessamento, ainda nao implementado.
+  static readonly INITIAL_PENDING_REFERENCE_DELAY_MS = 60_000;
+
   private constructor(
     public readonly id: string,
     public readonly providerId: string | undefined,
@@ -102,6 +111,11 @@ export class WagerTransaction {
     // kinds nunca ganham um WalletLedgerEntry, entao nao ha outro lugar que congele o saldo
     // observado no momento do processamento para um replay futuro.
     private _balanceAfterProcessing?: Money,
+    // Só populados por markPendingReference() - ausentes para qualquer transacao que nunca
+    // precisou esperar uma referencia. Permanecem gravados mesmo apos a transacao sair de
+    // PENDING_REFERENCE (historico de quantas tentativas o reprocessamento chegou a fazer).
+    private _attempts?: number,
+    private _nextAttemptAt?: Date,
   ) {}
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
@@ -172,6 +186,8 @@ export class WagerTransaction {
       state.failureCode,
       state.processedAt,
       state.balanceAfterProcessing,
+      state.attempts,
+      state.nextAttemptAt,
     );
   }
 
@@ -195,6 +211,14 @@ export class WagerTransaction {
     return this._balanceAfterProcessing;
   }
 
+  get attempts(): number | undefined {
+    return this._attempts;
+  }
+
+  get nextAttemptAt(): Date | undefined {
+    return this._nextAttemptAt;
+  }
+
   markProcessed(referenceTransactionId: string | undefined, at: Date, balanceAfterProcessing?: Money): void {
     this.assertTransitionAllowed("markProcessed", ["PENDING", "PENDING_REFERENCE"]);
     this._status = "PROCESSED";
@@ -203,9 +227,11 @@ export class WagerTransaction {
     this._balanceAfterProcessing = balanceAfterProcessing;
   }
 
-  markPendingReference(): void {
+  markPendingReference(now: Date): void {
     this.assertTransitionAllowed("markPendingReference", ["PENDING"]);
     this._status = "PENDING_REFERENCE";
+    this._attempts = 0;
+    this._nextAttemptAt = new Date(now.getTime() + WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS);
   }
 
   reject(code: FailureCode): void {

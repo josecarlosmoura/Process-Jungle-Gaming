@@ -27,7 +27,10 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     "REFERENCE_ALREADY_REVERSED"`), referência de outro `kind`/grupo ou que nunca vai se tornar
     válida (`failureCode: "REFERENCE_MISMATCH"`/`"REFERENCE_NOT_FOUND"`). Quando a referência ainda
     não existe (ou ainda está em processamento), responde `202 Accepted` com `status:
-    "PENDING_REFERENCE"` em vez de rejeitar — fica pendente para reprocessamento futuro.
+    "PENDING_REFERENCE"` em vez de rejeitar, gravando `attempts = 0` e `next_attempt_at` (1 minuto
+    no futuro — primeiro passo do backoff) para o worker de reprocessamento (ainda não
+    implementado) reler depois; repetir a mesma `Idempotency-Key` nesse estado nunca recalcula
+    esses metadados.
   - `ROLLBACK`: exige `referenceExternalTransactionId` apontando para uma `BET`, `WIN` ou
     `REFUND` já `PROCESSED` (nunca uma `LOSS`, que não afeta saldo), com o mesmo valor exato —
     aplica o efeito **inverso** ao da referência (credita de volta uma `BET`; debita de volta uma
@@ -36,7 +39,7 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     `REFERENCE_NOT_FOUND`) e, de forma própria, quando o débito reverso levaria o saldo a negativo
     (`failureCode: "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE"`, distinto de `INSUFFICIENT_FUNDS`, que
     é exclusivo de `BET`). Referência ainda não existente também responde `202 Accepted` com
-    `status: "PENDING_REFERENCE"`.
+    `status: "PENDING_REFERENCE"`, com os mesmos metadados de reprocessamento do `REFUND`.
   - Em qualquer `kind`: replay idempotente por `Idempotency-Key` (inclusive para transações
     rejeitadas e para `PENDING_REFERENCE`), e falha transitória de infraestrutura (`failureCode:
     "INTERNAL_ERROR"`, HTTP `503`) quando o lock da wallet não é obtido em 5s.

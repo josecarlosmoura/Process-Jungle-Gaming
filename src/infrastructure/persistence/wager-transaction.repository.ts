@@ -40,6 +40,8 @@ export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerT
       entity.balanceAfterAmount != null && entity.balanceAfterCurrency != null
         ? Money.from({ amount: entity.balanceAfterAmount, currency: entity.balanceAfterCurrency })
         : undefined,
+    attempts: entity.attempts ?? undefined,
+    nextAttemptAt: entity.nextAttemptAt ?? undefined,
   });
 }
 
@@ -62,6 +64,8 @@ export function wagerTransactionToEntityData(transaction: WagerTransaction): Req
     | "processedAt"
     | "balanceAfterAmount"
     | "balanceAfterCurrency"
+    | "attempts"
+    | "nextAttemptAt"
   > {
   return {
     id: transaction.id,
@@ -84,6 +88,8 @@ export function wagerTransactionToEntityData(transaction: WagerTransaction): Req
     processedAt: transaction.processedAt,
     balanceAfterAmount: transaction.balanceAfterProcessing?.toJSON().amount,
     balanceAfterCurrency: transaction.balanceAfterProcessing?.toJSON().currency,
+    attempts: transaction.attempts,
+    nextAttemptAt: transaction.nextAttemptAt,
   };
 }
 

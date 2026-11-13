@@ -67,4 +67,12 @@ export class WagerTransactionEntity {
 
   @Property({ fieldName: "balance_after_currency", type: "string", length: 3, nullable: true })
   balanceAfterCurrency?: string;
+
+  // Nullable juntos - ausentes exatamente para uma transacao que nunca entrou em
+  // PENDING_REFERENCE (constraint de banco garante o par: wager_transactions_pending_reference_metadata_pair_check).
+  @Property({ type: "number", nullable: true })
+  attempts?: number;
+
+  @Property({ fieldName: "next_attempt_at", nullable: true })
+  nextAttemptAt?: Date;
 }

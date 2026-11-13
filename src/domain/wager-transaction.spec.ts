@@ -64,6 +64,8 @@ function snapshotOf(transaction: WagerTransaction) {
     referenceTransactionId: transaction.referenceTransactionId,
     failureCode: transaction.failureCode,
     processedAt: transaction.processedAt,
+    attempts: transaction.attempts,
+    nextAttemptAt: transaction.nextAttemptAt,
   };
 }
 
@@ -139,7 +141,7 @@ describe("WagerTransaction", () => {
     const transaction = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
-    transaction.markPendingReference();
+    transaction.markPendingReference(new Date());
     const at = new Date("2026-01-02T00:00:00.000Z");
 
     transaction.markProcessed("resolved-tx-1", at);
@@ -173,7 +175,7 @@ describe("WagerTransaction", () => {
     const transaction = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
-    transaction.markPendingReference();
+    transaction.markPendingReference(new Date());
 
     transaction.reject("REFERENCE_NOT_FOUND");
 
@@ -195,9 +197,21 @@ describe("WagerTransaction", () => {
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
 
-    transaction.markPendingReference();
+    transaction.markPendingReference(new Date());
 
     expect(transaction.status).toBe("PENDING_REFERENCE");
+  });
+
+  test("markPendingReference records attempts 0 and nextAttemptAt one minute after the given instant", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "ROLLBACK", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    const now = new Date("2026-01-01T00:00:00.000Z");
+
+    transaction.markPendingReference(now);
+
+    expect(transaction.attempts).toBe(0);
+    expect(transaction.nextAttemptAt).toEqual(new Date(now.getTime() + WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS));
   });
 
   test("every transition throws InvalidTransactionStateError without mutating a terminal transaction, for all 3 terminal statuses and all 4 transition methods", () => {
@@ -212,7 +226,7 @@ describe("WagerTransaction", () => {
       expect(() => transaction.reject("SOME_CODE")).toThrow(InvalidTransactionStateError);
       expect(snapshotOf(transaction)).toEqual(before);
 
-      expect(() => transaction.markPendingReference()).toThrow(InvalidTransactionStateError);
+      expect(() => transaction.markPendingReference(new Date())).toThrow(InvalidTransactionStateError);
       expect(snapshotOf(transaction)).toEqual(before);
 
       expect(() => transaction.fail("SOME_CODE")).toThrow(InvalidTransactionStateError);
@@ -224,7 +238,7 @@ describe("WagerTransaction", () => {
     const transaction = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
-    transaction.markPendingReference();
+    transaction.markPendingReference(new Date());
     const before = snapshotOf(transaction);
 
     expect(() => transaction.fail("SOME_CODE")).toThrow(InvalidTransactionStateError);
@@ -235,10 +249,10 @@ describe("WagerTransaction", () => {
     const transaction = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
-    transaction.markPendingReference();
+    transaction.markPendingReference(new Date());
     const before = snapshotOf(transaction);
 
-    expect(() => transaction.markPendingReference()).toThrow(InvalidTransactionStateError);
+    expect(() => transaction.markPendingReference(new Date())).toThrow(InvalidTransactionStateError);
     expect(snapshotOf(transaction)).toEqual(before);
   });
 
@@ -249,7 +263,7 @@ describe("WagerTransaction", () => {
     const pendingReference = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
     );
-    pendingReference.markPendingReference();
+    pendingReference.markPendingReference(new Date());
     expect(pendingReference.isTerminal()).toBe(false);
 
     expect(buildTerminalTransaction("PROCESSED").isTerminal()).toBe(true);
@@ -364,6 +378,8 @@ describe("WagerTransaction", () => {
       failureCode: "SOME_CODE",
       processedAt: new Date("2026-01-01T00:05:00.000Z"),
       balanceAfterProcessing: Money.from({ amount: "1000.00", currency: "BRL" }),
+      attempts: 2,
+      nextAttemptAt: new Date("2026-01-01T00:10:00.000Z"),
     };
 
     const transaction = WagerTransaction.rehydrate(state);
@@ -386,6 +402,32 @@ describe("WagerTransaction", () => {
     expect(transaction.failureCode).toBe(state.failureCode);
     expect(transaction.processedAt).toEqual(state.processedAt);
     expect(transaction.balanceAfterProcessing).toBe(state.balanceAfterProcessing);
+    expect(transaction.attempts).toBe(state.attempts);
+    expect(transaction.nextAttemptAt).toEqual(state.nextAttemptAt);
+  });
+
+  test("rehydrate reconstructs attempts and nextAttemptAt as undefined for a transaction that never entered PENDING_REFERENCE", () => {
+    const state: WagerTransactionState = {
+      id: "tx-1",
+      providerId: "provider-1",
+      externalTransactionId: "ext-1",
+      idempotencyKey: "idem-1",
+      payloadHash: "hash-1",
+      walletId: "wallet-1",
+      playerId: "player-1",
+      roundId: "round-1",
+      gameId: "game-1",
+      kind: "BET",
+      money: Money.from({ amount: "10.00", currency: "BRL" }),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      status: "PROCESSED",
+      processedAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+
+    const transaction = WagerTransaction.rehydrate(state);
+
+    expect(transaction.attempts).toBeUndefined();
+    expect(transaction.nextAttemptAt).toBeUndefined();
   });
 
   test("rehydrate reconstructs a state that would violate create's invariants, without throwing any validation error", () => {
