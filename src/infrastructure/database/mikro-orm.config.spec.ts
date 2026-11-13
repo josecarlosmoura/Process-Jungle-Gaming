@@ -31,6 +31,7 @@ describe("resolveCliMikroOrmOptions", () => {
       AWS_REGION: "us-east-1",
       AWS_ACCESS_KEY_ID: "test",
       AWS_SECRET_ACCESS_KEY: "test",
+      LEDGER_CURSOR_SECRET: "cli-custom-ledger-cursor-secret",
     };
 
     const options = resolveCliMikroOrmOptions(env);

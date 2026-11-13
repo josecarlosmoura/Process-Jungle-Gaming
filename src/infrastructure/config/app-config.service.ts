@@ -50,4 +50,8 @@ export class AppConfigService {
   get nodeEnv(): EnvSchema["NODE_ENV"] {
     return this.configService.get("NODE_ENV", { infer: true });
   }
+
+  get ledgerCursorSecret(): string {
+    return this.configService.get("LEDGER_CURSOR_SECRET", { infer: true });
+  }
 }

@@ -11,6 +11,7 @@ const validEnv: Record<string, unknown> = {
   AWS_REGION: "us-east-1",
   AWS_ACCESS_KEY_ID: "test",
   AWS_SECRET_ACCESS_KEY: "test",
+  LEDGER_CURSOR_SECRET: "test-ledger-cursor-secret",
 };
 
 describe("validateEnv", () => {
@@ -24,6 +25,8 @@ describe("validateEnv", () => {
       [{ ...validEnv, DB_PORT: "abc" }, "DB_PORT"],
       [{ ...validEnv, AWS_REGION: "" }, "AWS_REGION"],
       [{ ...validEnv, LOCALSTACK_ENDPOINT: "localhost:4566" }, "LOCALSTACK_ENDPOINT"],
+      [{ ...validEnv, LEDGER_CURSOR_SECRET: undefined }, "LEDGER_CURSOR_SECRET"],
+      [{ ...validEnv, LEDGER_CURSOR_SECRET: "" }, "LEDGER_CURSOR_SECRET"],
     ];
 
     for (const [env, expectedField] of cases) {
