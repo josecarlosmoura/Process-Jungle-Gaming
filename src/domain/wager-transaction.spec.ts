@@ -211,7 +211,11 @@ describe("WagerTransaction", () => {
     transaction.markPendingReference(now);
 
     expect(transaction.attempts).toBe(0);
-    expect(transaction.nextAttemptAt).toEqual(new Date(now.getTime() + WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS));
+    // Literal independente da constante de producao (nao "now.getTime() + WagerTransaction.
+    // INITIAL_PENDING_REFERENCE_DELAY_MS") - uma mudanca indevida no valor da constante precisa
+    // quebrar este teste, nao se mover junto com ele.
+    expect(transaction.nextAttemptAt).toEqual(new Date("2026-01-01T00:01:00.000Z"));
+    expect(WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS).toBe(60_000);
   });
 
   test("every transition throws InvalidTransactionStateError without mutating a terminal transaction, for all 3 terminal statuses and all 4 transition methods", () => {
