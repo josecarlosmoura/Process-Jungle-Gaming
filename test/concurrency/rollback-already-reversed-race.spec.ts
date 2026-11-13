@@ -196,75 +196,121 @@ describe("corrida de ROLLBACK concorrente sobre a mesma referência", () => {
 
 describe("corrida de ROLLBACK concorrente perto do limite de saldo", () => {
   test(
-    "two concurrent ROLLBACK POSTs reversing the same PROCESSED WIN, where the wallet balance only covers one reverse debit without going negative, leave exactly one 201 PROCESSED DEBIT and the other 422 (REFERENCE_ALREADY_REVERSED or REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE), balance never negative",
+    "two concurrent ROLLBACK POSTs reversing two different PROCESSED WINs on the same wallet, where the balance only covers one of the two reverse debits, leave exactly one 201 PROCESSED DEBIT and the other 422 REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE, balance never negative",
     async () => {
-      const wallet = await createWallet("10.00");
+      const wallet = await createWallet("0.00");
       const providerId = "provider-rollback-race-balance";
       const playerId = randomUUID();
       const roundId = "round-rollback-race-balance";
-      const winExternalId = `win-${randomUUID()}`;
+      const winAExternalId = `win-a-${randomUUID()}`;
+      const winBExternalId = `win-b-${randomUUID()}`;
 
-      const win = await postWagerTransaction(
+      // Duas referencias distintas (nao a mesma WIN) - condicao necessaria para que a corrida
+      // force de fato o ramo de saldo negativo em vez de ser decidida antes disso pelo guard de
+      // "ja revertida" (esse e o papel de C13, nao deste teste): com referencias diferentes,
+      // REFERENCE_ALREADY_REVERSED nunca entra em jogo para o perdedor.
+      const winA = await postWagerTransaction(
         {
           providerId,
-          externalTransactionId: winExternalId,
+          externalTransactionId: winAExternalId,
           playerId,
           walletId: wallet.id,
           roundId,
           gameId: "rollback-race-balance-scenario",
           kind: "WIN",
-          money: { amount: "50.00", currency: "BRL" },
+          money: { amount: "20.00", currency: "BRL" },
         },
-        `${providerId}:${winExternalId}`,
+        `${providerId}:${winAExternalId}`,
       );
-      expect(win.status).toBe(201);
-      // Saldo apos o WIN: 60.00 - uma unica reversao de 50.00 cabe (sobra 10.00), mas duas
-      // reversoes concorrentes da mesma WIN nunca podem ambas debitar: a segunda, se chegar a
-      // tentar, encontraria so 10.00 disponiveis para um debito de 50.00.
-      expect(win.body.balance).toEqual({ amount: "60.00", currency: "BRL" });
+      expect(winA.status).toBe(201);
 
-      const rollbackRequestBody = {
-        providerId,
-        playerId,
-        walletId: wallet.id,
-        roundId,
-        gameId: "rollback-race-balance-scenario",
-        kind: "ROLLBACK",
-        money: { amount: "50.00", currency: "BRL" },
-        referenceExternalTransactionId: winExternalId,
-      };
+      const winB = await postWagerTransaction(
+        {
+          providerId,
+          externalTransactionId: winBExternalId,
+          playerId,
+          walletId: wallet.id,
+          roundId,
+          gameId: "rollback-race-balance-scenario",
+          kind: "WIN",
+          money: { amount: "25.00", currency: "BRL" },
+        },
+        `${providerId}:${winBExternalId}`,
+      );
+      expect(winB.status).toBe(201);
+      expect(winB.body.balance).toEqual({ amount: "45.00", currency: "BRL" });
+
+      // BET intermediaria deixa o saldo em 30.00 - cabe um debito reverso de 20.00 (sobra 10.00)
+      // ou de 25.00 (sobra 5.00), mas nunca os dois (20 + 25 = 45 > 30).
+      const bet = await postWagerTransaction(
+        {
+          providerId,
+          externalTransactionId: `bet-${randomUUID()}`,
+          playerId,
+          walletId: wallet.id,
+          roundId,
+          gameId: "rollback-race-balance-scenario",
+          kind: "BET",
+          money: { amount: "15.00", currency: "BRL" },
+        },
+        `${providerId}:bet-${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+      expect(bet.body.balance).toEqual({ amount: "30.00", currency: "BRL" });
 
       try {
+        // first e second correspondem, por posicao, a ROLLBACK-A (20.00) e ROLLBACK-B (25.00) -
+        // essa correspondencia nao muda com a ordem de chegada no servidor; so qual delas ganha o
+        // lock da wallet e nao-deterministico.
         const [first, second] = await Promise.all([
           postWagerTransaction(
-            { ...rollbackRequestBody, externalTransactionId: `rollback-a-${randomUUID()}` },
+            {
+              providerId,
+              playerId,
+              walletId: wallet.id,
+              roundId,
+              gameId: "rollback-race-balance-scenario",
+              kind: "ROLLBACK",
+              money: { amount: "20.00", currency: "BRL" },
+              referenceExternalTransactionId: winAExternalId,
+              externalTransactionId: `rollback-a-${randomUUID()}`,
+            },
             `${providerId}:rollback-a-${randomUUID()}`,
           ),
           postWagerTransaction(
-            { ...rollbackRequestBody, externalTransactionId: `rollback-b-${randomUUID()}` },
+            {
+              providerId,
+              playerId,
+              walletId: wallet.id,
+              roundId,
+              gameId: "rollback-race-balance-scenario",
+              kind: "ROLLBACK",
+              money: { amount: "25.00", currency: "BRL" },
+              referenceExternalTransactionId: winBExternalId,
+              externalTransactionId: `rollback-b-${randomUUID()}`,
+            },
             `${providerId}:rollback-b-${randomUUID()}`,
           ),
         ]);
-        const responses = [first, second];
 
-        const succeeded = responses.filter((response) => response.status === 201);
-        const rejected = responses.filter((response) => response.status === 422);
+        const aSucceeded = first.status === 201;
+        const expectedBalance = aSucceeded ? "10.00" : "5.00";
 
-        expect(succeeded.length).toBe(1);
-        expect(rejected.length).toBe(1);
-        expect(succeeded[0]?.body.status).toBe("PROCESSED");
-        expect(rejected[0]?.body.status).toBe("REJECTED");
-        expect(["REFERENCE_ALREADY_REVERSED", "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE"]).toContain(
-          rejected[0]?.body.failureCode,
+        expect(first.status === 201 ? second.status : first.status).toBe(422);
+        expect(first.body.status).toBe(aSucceeded ? "PROCESSED" : "REJECTED");
+        expect(second.body.status).toBe(aSucceeded ? "REJECTED" : "PROCESSED");
+        // Referencias distintas - o perdedor nunca encontra REFERENCE_ALREADY_REVERSED (nenhum
+        // ROLLBACK anterior aponta para a referencia dele), so o guard de saldo.
+        expect(aSucceeded ? second.body.failureCode : first.body.failureCode).toBe(
+          "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE",
         );
 
         const rows = await connection.execute<{ balance_amount: string }[]>(
           "select balance_amount from wallets where id = ?",
           [wallet.id],
         );
-        // Exatamente uma reversao aplicada (DEBIT de 50.00 sobre os 60.00 do WIN) - nunca duas,
-        // e nunca negativo.
-        expect(rows[0]?.balance_amount).toBe("10.00");
+        // Exatamente uma das duas reversoes aplicada - nunca as duas, e nunca negativo.
+        expect(rows[0]?.balance_amount).toBe(expectedBalance);
       } finally {
         await deleteWalletCascade(wallet.id);
       }

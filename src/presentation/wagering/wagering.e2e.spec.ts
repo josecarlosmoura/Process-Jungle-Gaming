@@ -91,12 +91,17 @@ interface PendingReferenceMetadata {
 }
 
 async function pendingReferenceMetadataFor(transactionId: string): Promise<PendingReferenceMetadata> {
-  const rows = await connection.execute<{ attempts: number | null; next_attempt_at: Date | null }[]>(
+  const rows = await connection.execute<{ attempts: number | null; next_attempt_at: string | null }[]>(
     "select attempts, next_attempt_at from wager_transactions where id = ?",
     [transactionId],
   );
   const row = rows[0];
-  return { attempts: row?.attempts ?? null, nextAttemptAt: row?.next_attempt_at ?? null };
+  // connection.execute() devolve a linha crua do driver, sem a hidratacao de tipos do ORM -
+  // next_attempt_at chega como string ISO (timestamptz), nunca como Date.
+  return {
+    attempts: row?.attempts ?? null,
+    nextAttemptAt: row?.next_attempt_at ? new Date(row.next_attempt_at) : null,
+  };
 }
 
 interface MoneyBody {
