@@ -105,6 +105,39 @@ describe("WalletLedgerEntryMikroOrmRepository - round-trip", () => {
   });
 });
 
+describe("WalletLedgerEntryMikroOrmRepository - findByTransactionId", () => {
+  test("findByTransactionId returns the entry matching that transaction", async () => {
+    const walletId = await seedWallet();
+    const transactionId = await seedTransaction(walletId);
+    try {
+      const entry = WalletLedgerEntry.create({
+        id: randomUUID(),
+        walletId,
+        transactionId,
+        direction: "DEBIT",
+        money: Money.from({ amount: "10.00", currency: "BRL" }),
+        balanceBefore: Money.from({ amount: "500.00", currency: "BRL" }),
+        balanceAfter: Money.from({ amount: "490.00", currency: "BRL" }),
+      });
+      await makeRepo().save(entry);
+
+      const found = await makeRepo().findByTransactionId(transactionId);
+
+      expect(found?.id).toBe(entry.id);
+      expect(found?.balanceAfter.toJSON()).toEqual({ amount: "490.00", currency: "BRL" });
+    } finally {
+      await deleteLedgerEntries(walletId);
+      await deleteTransactions(walletId);
+      await deleteWallet(walletId);
+    }
+  });
+
+  test("findByTransactionId returns null when no entry matches", async () => {
+    const found = await makeRepo().findByTransactionId(randomUUID());
+    expect(found).toBeNull();
+  });
+});
+
 describe("WalletLedgerEntryMikroOrmRepository - save() e insert-only", () => {
   test("a second save with the same id rejects with a unique constraint violation", async () => {
     const walletId = await seedWallet();

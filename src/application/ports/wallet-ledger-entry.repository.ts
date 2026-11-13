@@ -11,6 +11,7 @@ export interface LedgerPagination {
 export interface WalletLedgerEntryRepository {
   save(entry: WalletLedgerEntry): Promise<void>;
   findByWalletId(walletId: string, pagination: LedgerPagination): Promise<WalletLedgerEntry[]>;
+  findByTransactionId(transactionId: string): Promise<WalletLedgerEntry | null>;
 }
 
 export interface LedgerCursor {

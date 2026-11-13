@@ -63,6 +63,11 @@ export class WalletLedgerEntryMikroOrmRepository implements WalletLedgerEntryRep
     await this.em.insert(WalletLedgerEntryEntity, ledgerEntryToEntityData(entry));
   }
 
+  async findByTransactionId(transactionId: string): Promise<WalletLedgerEntry | null> {
+    const entity = await this.em.findOne(WalletLedgerEntryEntity, { transactionId });
+    return entity ? ledgerEntryToDomain(entity) : null;
+  }
+
   async findByWalletId(walletId: string, pagination: LedgerPagination): Promise<WalletLedgerEntry[]> {
     const where: FilterQuery<WalletLedgerEntryEntity> = { walletId };
     if (pagination.cursor) {
