@@ -4,6 +4,7 @@ import type { ArgumentsHost } from "@nestjs/common";
 import type { Response } from "express";
 import {
   BusinessRuleRejectionError,
+  DomainError,
   PayloadValidationError,
   ResourceConflictError,
   ResourceNotFoundError,
@@ -105,6 +106,23 @@ describe("DomainErrorExceptionFilter", () => {
     }
 
     filter.catch(new SomeGenuineBug(), host);
+
+    expect(captured.statusCode).toBe(500);
+    expect(captured.body).toEqual({ message: "Internal server error" });
+  });
+
+  test("a DomainError subclass that bypasses all 5 named categories, extending DomainError directly, responds 500 logged and with no failureCode, same as a genuinely unknown error", () => {
+    const filter = new DomainErrorExceptionFilter();
+    const { host, captured } = fakeHost();
+
+    class UncategorizedDomainError extends DomainError {
+      constructor() {
+        super("forgot to pick a category", "INTERNAL_ERROR");
+        this.name = "UncategorizedDomainError";
+      }
+    }
+
+    filter.catch(new UncategorizedDomainError(), host);
 
     expect(captured.statusCode).toBe(500);
     expect(captured.body).toEqual({ message: "Internal server error" });
