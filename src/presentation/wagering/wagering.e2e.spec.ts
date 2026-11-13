@@ -288,6 +288,74 @@ describe("POST /wagering/transactions - replay de uma BET REJECTED", () => {
   });
 });
 
+describe("POST /wagering/transactions - conflito de idempotência (payload diferente)", () => {
+  test("reusing the Idempotency-Key of an already PROCESSED BET with a different money.amount returns 409 IDEMPOTENCY_CONFLICT, persists no second WagerTransaction and does not debit again", async () => {
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const firstPayload = betPayload(walletId, { money: { amount: "25.00", currency: "BRL" } });
+    try {
+      const first = await postBet(firstPayload, idempotencyKey);
+      expect(first.status).toBe(201);
+
+      const conflicting = await postBet({ ...firstPayload, money: { amount: "999.00", currency: "BRL" } }, idempotencyKey);
+
+      expect(conflicting.status).toBe(409);
+      expect(conflicting.body.failureCode).toBe("IDEMPOTENCY_CONFLICT");
+      expect(conflicting.body.transactionId).toBeUndefined();
+      expect(await countWhere("wager_transactions", "idempotency_key", idempotencyKey)).toBe(1);
+
+      const rows = await connection.execute<{ balance_amount: string }[]>(
+        "select balance_amount from wallets where id = ?",
+        [walletId],
+      );
+      expect(rows[0]?.balance_amount).toBe("975.00");
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("reusing the Idempotency-Key of an already PROCESSED BET with a different gameId also returns 409 IDEMPOTENCY_CONFLICT", async () => {
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const firstPayload = betPayload(walletId, { gameId: "fortune-chimp", money: { amount: "25.00", currency: "BRL" } });
+    try {
+      const first = await postBet(firstPayload, idempotencyKey);
+      expect(first.status).toBe(201);
+
+      const conflicting = await postBet({ ...firstPayload, gameId: "another-game" }, idempotencyKey);
+
+      expect(conflicting.status).toBe(409);
+      expect(conflicting.body.failureCode).toBe("IDEMPOTENCY_CONFLICT");
+      expect(await countWhere("wager_transactions", "idempotency_key", idempotencyKey)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - conflito de idempotência contra uma transação REJECTED", () => {
+  test("reusing the Idempotency-Key of an already REJECTED BET with a different payload returns 409 IDEMPOTENCY_CONFLICT instead of replaying the REJECTED result", async () => {
+    const walletId = await insertWallet("20.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const firstPayload = betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } });
+    try {
+      const first = await postBet(firstPayload, idempotencyKey);
+      expect(first.status).toBe(422);
+      expect(first.body.status).toBe("REJECTED");
+      expect(first.body.failureCode).toBe("INSUFFICIENT_FUNDS");
+
+      const conflicting = await postBet({ ...firstPayload, money: { amount: "5.00", currency: "BRL" } }, idempotencyKey);
+
+      expect(conflicting.status).toBe(409);
+      expect(conflicting.body.failureCode).toBe("IDEMPOTENCY_CONFLICT");
+      expect(conflicting.body.status).toBeUndefined();
+      expect(await countWhere("wager_transactions", "idempotency_key", idempotencyKey)).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
 describe("POST /wagering/transactions - corrida de inserção na mesma Idempotency-Key", () => {
   test(
     "two concurrent POST /wagering/transactions with the same Idempotency-Key and walletId persist exactly one WagerTransaction and debit the balance at most once",

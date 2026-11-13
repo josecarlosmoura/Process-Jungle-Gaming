@@ -49,6 +49,13 @@ export class LockAcquisitionTimeoutError extends Error {
   }
 }
 
+export class IdempotencyConflictError extends Error {
+  constructor(idempotencyKey: string) {
+    super(`Idempotency-Key "${idempotencyKey}" was already used with a different payload`);
+    this.name = "IdempotencyConflictError";
+  }
+}
+
 // SQLSTATE do Postgres para "lock_not_available" - o conversor de excecoes do driver Postgres do
 // MikroORM nao mapeia esse codigo para uma classe dedicada (so 40001/40P01 deadlock, 23xxx
 // constraints, 42xxx sintaxe), entao a deteccao e pelo .code bruto preservado em DriverException.
@@ -74,16 +81,23 @@ export class ProcessWagerTransactionUseCase {
     if (!SUPPORTED_KINDS.has(command.kind)) {
       throw new UnsupportedWagerTransactionKindError(command.kind);
     }
+    // command.kind so chega aqui dentro de SUPPORTED_KINDS - computado antes de abrir a
+    // transacao para que o catch da corrida de insercao abaixo possa comparar contra a linha
+    // vencedora sem precisar recalcular o hash dentro de uma transacao ja abortada.
+    const kind = command.kind as WagerTransactionKind;
+    const payloadHash = computeWagerTransactionPayloadHash({ ...command, kind });
     try {
-      return await this.em.transactional(() => this.process(command));
+      return await this.em.transactional(() => this.process(command, kind, payloadHash));
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
         // Corrida na criacao: a linha vencedora ja esta commitada por quem ganhou a corrida de
-        // insercao na constraint unica de idempotency_key - releio e devolvo como replay, nunca
-        // como erro, igual ao mesmo padrao ja usado por CreateWalletUseCase.
+        // insercao na constraint unica de idempotency_key - releio e decido entre replay e
+        // conflito pelo mesmo criterio usado quando a linha e encontrada antes do INSERT. A
+        // perdedora nunca deve ser tratada como replay da vencedora so porque os payloads
+        // colidiram na mesma Idempotency-Key.
         const existing = await this.wagerTransactionRepository.findByIdempotencyKey(command.idempotencyKey);
         if (existing) {
-          return this.toReplayResult(existing);
+          return this.resolveExisting(existing, payloadHash);
         }
       }
       if (error instanceof DriverException && (error as DriverException).code === LOCK_NOT_AVAILABLE_SQLSTATE) {
@@ -93,7 +107,11 @@ export class ProcessWagerTransactionUseCase {
     }
   }
 
-  private async process(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
+  private async process(
+    command: ProcessWagerTransactionCommand,
+    kind: WagerTransactionKind,
+    payloadHash: string,
+  ): Promise<ProcessWagerTransactionResult> {
     // ARCHITECTURE.md secao 5.1: teto de espera pelo lock pessimista, primeira instrucao da
     // transacao - sem isso, uma sessao travada penduraria a fila de espera daquela wallet
     // indefinidamente. em.execute() (nao getConnection().execute()) resolve o contexto
@@ -103,7 +121,7 @@ export class ProcessWagerTransactionUseCase {
 
     const existing = await this.wagerTransactionRepository.findByIdempotencyKey(command.idempotencyKey);
     if (existing) {
-      return this.toReplayResult(existing);
+      return this.resolveExisting(existing, payloadHash);
     }
 
     const wallet = await this.walletRepository.findByIdForUpdate(command.walletId);
@@ -111,10 +129,6 @@ export class ProcessWagerTransactionUseCase {
       throw new WalletNotFoundError(command.walletId);
     }
 
-    // command.kind so chega aqui dentro de SUPPORTED_KINDS - execute() ja rejeitou qualquer
-    // outro valor antes de abrir a transacao.
-    const kind = command.kind as WagerTransactionKind;
-    const payloadHash = computeWagerTransactionPayloadHash({ ...command, kind });
     const transaction = WagerTransaction.create({
       id: randomUUID(),
       providerId: command.providerId,
@@ -259,6 +273,17 @@ export class ProcessWagerTransactionUseCase {
       reference.roundId === command.roundId &&
       reference.money.currency === command.money.currency
     );
+  }
+
+  // A mesma Idempotency-Key com o mesmo payloadHash e replay (devolve o resultado original, sem
+  // reaplicar nada); com payloadHash diferente e conflito, nunca replay - mesmo quando a
+  // transacao existente ja terminou REJECTED/FAILED, que so e replay para uma repeticao exata do
+  // mesmo payload.
+  private resolveExisting(existing: WagerTransaction, payloadHash: string): Promise<ProcessWagerTransactionResult> {
+    if (!existing.matchesPayload(payloadHash)) {
+      throw new IdempotencyConflictError(existing.idempotencyKey);
+    }
+    return this.toReplayResult(existing);
   }
 
   private async toReplayResult(transaction: WagerTransaction): Promise<ProcessWagerTransactionResult> {

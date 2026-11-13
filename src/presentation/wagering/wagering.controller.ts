@@ -3,6 +3,7 @@ import type { Response } from "express";
 import { z } from "zod";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import {
+  IdempotencyConflictError,
   LockAcquisitionTimeoutError,
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionResult,
@@ -77,6 +78,9 @@ export class WageringController {
       }
       if (error instanceof LockAcquisitionTimeoutError) {
         throw new HttpException({ failureCode: "INTERNAL_ERROR" }, HttpStatus.SERVICE_UNAVAILABLE);
+      }
+      if (error instanceof IdempotencyConflictError) {
+        throw new HttpException({ failureCode: "IDEMPOTENCY_CONFLICT" }, HttpStatus.CONFLICT);
       }
       if (error instanceof UnsupportedWagerTransactionKindError) {
         throw new BadRequestException(error.message);
