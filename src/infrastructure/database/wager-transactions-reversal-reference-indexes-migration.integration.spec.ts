@@ -278,11 +278,23 @@ describe("wager_transactions reversal reference indexes (migration:down)", () =>
         expect(afterDown.indexes).not.toContain("wager_transactions_refund_reference_unique");
         expect(afterDown.indexes).not.toContain("wager_transactions_rollback_reference_unique");
 
-        // Nenhuma outra coluna ou constraint pode ter sido afetada - compara o snapshot completo
-        // de antes (colunas e constraints inalteradas; indices exatamente os de antes menos os
-        // dois que esta migration introduziu), nao so a existencia pontual de uma coluna.
-        expect(afterDown.columns).toEqual(beforeDown.columns);
-        expect(afterDown.constraints).toEqual(beforeDown.constraints);
+        // "--to" tambem reverte qualquer migration mais nova que esta - hoje,
+        // WagerTransactionsPendingReferenceMetadata (attempts/next_attempt_at e seus dois check
+        // constraints), empilhada por cima desta depois que este teste foi escrito. A comparacao
+        // de "resto da tabela inalterado" precisa descontar isso tambem, nao so os dois indices
+        // que esta migration introduziu - senao quebra a cada nova migration empilhada aqui.
+        expect(afterDown.columns).toEqual(
+          beforeDown.columns.filter(
+            (c) => c !== "attempts:integer:YES" && c !== "next_attempt_at:timestamp with time zone:YES",
+          ),
+        );
+        expect(afterDown.constraints).toEqual(
+          beforeDown.constraints.filter(
+            (c) =>
+              c !== "wager_transactions_pending_reference_metadata_pair_check:CHECK" &&
+              c !== "wager_transactions_attempts_non_negative_check:CHECK",
+          ),
+        );
         expect(afterDown.indexes).toEqual(
           beforeDown.indexes.filter(
             (name) =>

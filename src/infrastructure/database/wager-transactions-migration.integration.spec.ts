@@ -151,7 +151,7 @@ afterAll(async () => {
 });
 
 describe("wager_transactions table schema (migration:up)", () => {
-  test("migration:up creates the wager_transactions table with exactly the expected 20 columns", async () => {
+  test("migration:up creates the wager_transactions table with exactly the expected 22 columns", async () => {
     await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
@@ -181,6 +181,10 @@ describe("wager_transactions table schema (migration:up)", () => {
         // preenchido para transacoes PROCESSED sem WalletLedgerEntry (hoje, so LOSS) - AD-006.
         "balance_after_amount",
         "balance_after_currency",
+        // attempts/next_attempt_at: metadados de reprocessamento, so preenchidos por
+        // markPendingReference() - ausentes para uma transacao que nunca entrou em PENDING_REFERENCE.
+        "attempts",
+        "next_attempt_at",
       ].sort(),
     );
 
@@ -251,6 +255,8 @@ describe("wager_transactions table schema (migration:up)", () => {
       "processed_at",
       "balance_after_amount",
       "balance_after_currency",
+      "attempts",
+      "next_attempt_at",
     ];
 
     for (const name of notNullable) {

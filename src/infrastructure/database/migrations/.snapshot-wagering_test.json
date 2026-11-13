@@ -687,7 +687,7 @@
       "checks": [
         {
           "name": "wallet_ledger_entries_balance_arithmetic_check",
-          "columnName": "balance_before_amount",
+          "columnName": "money_amount",
           "definition": "CHECK ((((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))))",
           "expression": "((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))"
         },

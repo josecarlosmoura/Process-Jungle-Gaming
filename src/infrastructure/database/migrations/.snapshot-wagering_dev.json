@@ -365,6 +365,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "character"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
         }
       },
       "name": "wager_transactions",
@@ -437,6 +469,12 @@
       ],
       "checks": [
         {
+          "name": "wager_transactions_attempts_non_negative_check",
+          "columnName": "attempts",
+          "definition": "CHECK (((attempts IS NULL) OR (attempts >= 0)))",
+          "expression": "(attempts IS NULL) OR (attempts >= 0)"
+        },
+        {
           "name": "wager_transactions_balance_after_currency_format",
           "columnName": "balance_after_currency",
           "definition": "CHECK ((balance_after_currency ~ '^[A-Z]{3}$'::text))",
@@ -444,7 +482,7 @@
         },
         {
           "name": "wager_transactions_balance_after_pair_check",
-          "columnName": "balance_after_amount",
+          "columnName": "balance_after_currency",
           "definition": "CHECK (((balance_after_amount IS NULL) = (balance_after_currency IS NULL)))",
           "expression": "(balance_after_amount IS NULL) = (balance_after_currency IS NULL)"
         },
@@ -456,9 +494,15 @@
         },
         {
           "name": "wager_transactions_opening_fields_null_check",
-          "columnName": "kind",
+          "columnName": "provider_id",
           "definition": "CHECK ((((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))))",
           "expression": "((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))"
+        },
+        {
+          "name": "wager_transactions_pending_reference_metadata_pair_check",
+          "columnName": "next_attempt_at",
+          "definition": "CHECK (((attempts IS NULL) = (next_attempt_at IS NULL)))",
+          "expression": "(attempts IS NULL) = (next_attempt_at IS NULL)"
         }
       ],
       "foreignKeys": {
@@ -670,7 +714,7 @@
       "checks": [
         {
           "name": "wallet_ledger_entries_balance_arithmetic_check",
-          "columnName": "balance_after_amount",
+          "columnName": "balance_before_amount",
           "definition": "CHECK ((((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))))",
           "expression": "((direction = 'DEBIT'::text) AND ((balance_before_amount - money_amount) = balance_after_amount)) OR ((direction = 'CREDIT'::text) AND ((balance_before_amount + money_amount) = balance_after_amount))"
         },
