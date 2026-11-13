@@ -105,6 +105,24 @@ describe("WalletMikroOrmRepository - round-trip", () => {
   });
 });
 
+describe("WalletMikroOrmRepository - findById (leitura sem lock)", () => {
+  test("findById issues a plain SELECT without FOR UPDATE", async () => {
+    const id = randomUUID();
+    const playerId = randomUUID();
+    try {
+      await makeRepo().save(Wallet.open({ id, playerId, initialBalance: Money.zero("BRL") }));
+
+      capturedSql.length = 0;
+      const found = await makeRepo().findById(id);
+
+      expect(found?.id).toBe(id);
+      expect(capturedSql.some((line) => /for update/i.test(line))).toBe(false);
+    } finally {
+      await deleteWallet(id);
+    }
+  });
+});
+
 describe("WalletMikroOrmRepository - lock pessimista", () => {
   test("findByIdForUpdate issues a SELECT ... FOR UPDATE", async () => {
     const id = randomUUID();

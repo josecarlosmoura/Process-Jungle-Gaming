@@ -5,17 +5,19 @@ export class WagerTransactionEntity {
   @PrimaryKey({ type: "uuid" })
   id!: string;
 
-  @Property({ fieldName: "provider_id", type: "text" })
-  providerId!: string;
+  // Nullable so que exatamente quando kind = "OPENING" - a constraint de banco
+  // (wager_transactions_opening_fields_null_check) garante o inverso para qualquer outro kind.
+  @Property({ fieldName: "provider_id", type: "text", nullable: true })
+  providerId?: string;
 
-  @Property({ fieldName: "external_transaction_id", type: "text" })
-  externalTransactionId!: string;
+  @Property({ fieldName: "external_transaction_id", type: "text", nullable: true })
+  externalTransactionId?: string;
 
   @Property({ fieldName: "idempotency_key", type: "text" })
   idempotencyKey!: string;
 
-  @Property({ fieldName: "payload_hash", type: "text" })
-  payloadHash!: string;
+  @Property({ fieldName: "payload_hash", type: "text", nullable: true })
+  payloadHash?: string;
 
   // Coluna escalar simples, nunca @ManyToOne: Wallet e WagerTransaction são agregados
   // distintos, referenciados só por id.
@@ -25,11 +27,11 @@ export class WagerTransactionEntity {
   @Property({ fieldName: "player_id", type: "text" })
   playerId!: string;
 
-  @Property({ fieldName: "round_id", type: "text" })
-  roundId!: string;
+  @Property({ fieldName: "round_id", type: "text", nullable: true })
+  roundId?: string;
 
-  @Property({ fieldName: "game_id", type: "text" })
-  gameId!: string;
+  @Property({ fieldName: "game_id", type: "text", nullable: true })
+  gameId?: string;
 
   @Property({ type: "text" })
   kind!: string;

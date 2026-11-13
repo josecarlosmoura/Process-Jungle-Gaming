@@ -29,8 +29,9 @@ Serviço financeiro distribuído que recebe transações de apostas (`BET`, `WIN
 | Tabela `wallet_ledger_entries` (migration + constraints no banco) | ✅ concluído |
 | Entidade de domínio `WalletLedgerEntry` (estruturalmente imutável, sem ORM) | ✅ concluído |
 | Repositórios (`Wallet`/`WagerTransaction`/`WalletLedgerEntry`) com MikroORM, incluindo lock pessimista por `walletId` | ✅ concluído |
+| `CreateWalletUseCase`/`GetWalletUseCase` + `POST /wallets` + `GET /wallets/:walletId` | ✅ concluído |
 
-A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem quatro blocos de construção — `Money` (`src/domain/money.ts`), `Wallet` (`src/domain/wallet.ts`, Aggregate Root com `open`/`rehydrate`/`debit`/`credit`), `WagerTransaction` (`src/domain/wager-transaction.ts`, com a máquina de estados `PENDING`/`PENDING_REFERENCE`/`PROCESSED`/`REJECTED`/`FAILED`, `create`/`createOpening`/`rehydrate` e as consultas `affectsBalance`/`requiresReference`/`matchesPayload`/`ledgerDirectionFor`) e `WalletLedgerEntry` (`src/domain/wallet-ledger-entry.ts`, estruturalmente imutável — sem nenhum método de transição — cuja factory `create` valida a própria aritmética do lançamento, `balanceBefore ± money == balanceAfter` conforme a `direction`, e `rehydrate` reconstrói sem revalidar) —, mas nenhum dos quatro ainda é consumido por nenhuma rota ou fila — são classes de domínio puras (sem ORM, sem banco), exercidas apenas pela própria suíte de testes unitários. As tabelas `wallets`, `wager_transactions` e `wallet_ledger_entries` já existem no banco, com as garantias de unicidade, integridade referencial e formato aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`/FK) — `wager_transactions` inclui a constraint de idempotência (`UNIQUE (idempotency_key)`), a unicidade de referência externa (`UNIQUE (provider_id, external_transaction_id)`), FKs para `wallets` e para si mesma (`ON DELETE RESTRICT`) e `CHECK`s fechados de `kind`/`status`; `wallet_ledger_entries` é o histórico contábil append-only (um lançamento por transação por wallet, via `UNIQUE (wallet_id, transaction_id)`), com FKs para `wallets` e `wager_transactions` (`ON DELETE RESTRICT`), `CHECK` fechado de `direction` (`DEBIT`/`CREDIT`) e um `CHECK` que reforça no próprio banco a consistência aritmética do lançamento (`balance_before_amount ± money_amount = balance_after_amount`, conforme a direção) — nenhuma coluna de status/estado mutável existe nesta tabela, e nenhuma rotina de `UPDATE`/`DELETE` sobre ela existe em nenhuma camada do código. As três tabelas já têm entidade MikroORM mapeada e repositório concreto (`src/infrastructure/persistence/`), implementando as portas `WalletRepository`/`WagerTransactionRepository`/`WalletLedgerEntryRepository` (`src/application/ports/`) — a conversão `string ↔ Money` acontece inteira dentro do repositório, nunca no domínio. `WalletMikroOrmRepository.findByIdForUpdate` é a primeira aparição real do lock pessimista por `walletId` (`SELECT ... FOR UPDATE`, provado por um teste automatizado que serializa duas transações concorrentes sobre a mesma wallet, além do passo manual com dois `psql` descrito mais abaixo). `save()` é upsert para `Wallet`/`WagerTransaction`, mas só insere (nunca upsert) para `WalletLedgerEntry` — uma segunda gravação com o mesmo id estoura a constraint única do Postgres em vez de sobrescrever silenciosamente, reforçando a imutabilidade do ledger. A listagem paginada do ledger (`findByWalletId`) usa um cursor opaco assinado com HMAC-SHA256 (chave em `LEDGER_CURSOR_SECRET`), nunca um número de página. Ainda não existe nenhuma rota HTTP nem caso de uso consumindo esses repositórios — chega na próxima tarefa (`CreateWalletUseCase`).
+A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável ausente ou malformada derruba o processo antes de ele escutar), conecta ao PostgreSQL via MikroORM, mantém um cliente SQS apontando para o LocalStack e expõe `GET /health/live` e `GET /health/ready` — nenhum endpoint de negócio existe ainda, isso começa nas próximas tarefas. O domínio já tem quatro blocos de construção — `Money` (`src/domain/money.ts`), `Wallet` (`src/domain/wallet.ts`, Aggregate Root com `open`/`rehydrate`/`debit`/`credit`), `WagerTransaction` (`src/domain/wager-transaction.ts`, com a máquina de estados `PENDING`/`PENDING_REFERENCE`/`PROCESSED`/`REJECTED`/`FAILED`, `create`/`createOpening`/`rehydrate` e as consultas `affectsBalance`/`requiresReference`/`matchesPayload`/`ledgerDirectionFor`) e `WalletLedgerEntry` (`src/domain/wallet-ledger-entry.ts`, estruturalmente imutável — sem nenhum método de transição — cuja factory `create` valida a própria aritmética do lançamento, `balanceBefore ± money == balanceAfter` conforme a `direction`, e `rehydrate` reconstrói sem revalidar) —, mas nenhum dos quatro ainda é consumido por nenhuma rota ou fila — são classes de domínio puras (sem ORM, sem banco), exercidas apenas pela própria suíte de testes unitários. As tabelas `wallets`, `wager_transactions` e `wallet_ledger_entries` já existem no banco, com as garantias de unicidade, integridade referencial e formato aplicadas diretamente pelo Postgres (`UNIQUE`/`CHECK`/FK) — `wager_transactions` inclui a constraint de idempotência (`UNIQUE (idempotency_key)`), a unicidade de referência externa (`UNIQUE (provider_id, external_transaction_id)`), FKs para `wallets` e para si mesma (`ON DELETE RESTRICT`) e `CHECK`s fechados de `kind`/`status`; `wallet_ledger_entries` é o histórico contábil append-only (um lançamento por transação por wallet, via `UNIQUE (wallet_id, transaction_id)`), com FKs para `wallets` e `wager_transactions` (`ON DELETE RESTRICT`), `CHECK` fechado de `direction` (`DEBIT`/`CREDIT`) e um `CHECK` que reforça no próprio banco a consistência aritmética do lançamento (`balance_before_amount ± money_amount = balance_after_amount`, conforme a direção) — nenhuma coluna de status/estado mutável existe nesta tabela, e nenhuma rotina de `UPDATE`/`DELETE` sobre ela existe em nenhuma camada do código. As três tabelas já têm entidade MikroORM mapeada e repositório concreto (`src/infrastructure/persistence/`), implementando as portas `WalletRepository`/`WagerTransactionRepository`/`WalletLedgerEntryRepository` (`src/application/ports/`) — a conversão `string ↔ Money` acontece inteira dentro do repositório, nunca no domínio. `WalletMikroOrmRepository.findByIdForUpdate` é a primeira aparição real do lock pessimista por `walletId` (`SELECT ... FOR UPDATE`, provado por um teste automatizado que serializa duas transações concorrentes sobre a mesma wallet, além do passo manual com dois `psql` descrito mais abaixo). `save()` é upsert para `Wallet`/`WagerTransaction`, mas só insere (nunca upsert) para `WalletLedgerEntry` — uma segunda gravação com o mesmo id estoura a constraint única do Postgres em vez de sobrescrever silenciosamente, reforçando a imutabilidade do ledger. A listagem paginada do ledger (`findByWalletId`) usa um cursor opaco assinado com HMAC-SHA256 (chave em `LEDGER_CURSOR_SECRET`), nunca um número de página. Esses repositórios já têm um primeiro consumidor real: `CreateWalletUseCase` (`src/application/use-cases/create-wallet.use-case.ts`) cria uma wallet dentro de uma única transação SQL (`EntityManager.transactional()`) — verifica unicidade `(playerId, currency)` (conflito vira `409`, com a constraint do banco como última linha de defesa contra corrida), cria a `Wallet` e, só quando `initialBalance` é positivo, gera internamente uma transação `OPENING` já `PROCESSED` e o `WalletLedgerEntry` `CREDIT` correspondente. Como `OPENING` não tem provedor/rodada/jogo reais por trás, as colunas `provider_id`/`external_transaction_id`/`round_id`/`game_id`/`payload_hash` de `wager_transactions` são `NULL` exatamente para esse `kind` (nunca um valor fabricado) — uma `CHECK` no próprio banco garante o inverso (`NOT NULL`) para qualquer outro `kind`. `GetWalletUseCase` consulta por `WalletRepository.findById` (leitura simples, sem o lock pessimista de `findByIdForUpdate`).
 
 ## Endpoints
 
@@ -38,6 +39,8 @@ A aplicação valida as variáveis de ambiente no boot (fail-fast: uma variável
 | ------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | `GET`  | `/health/live`  | Confirma só que o processo está vivo — nunca consulta Postgres, SQS ou qualquer dependência externa. Responde `200 { "status": "ok" }` mesmo com `docker compose down`. | Nenhuma (endpoint aberto) |
 | `GET`  | `/health/ready` | Confirma que a aplicação consegue executar uma query real no PostgreSQL **e** resolver a fila principal no SQS/LocalStack configurados (timeout de 2000ms cada, em paralelo). Responde `200 { "status": "ok", "postgres": "up", "sqs": "up" }` quando ambos alcançáveis, `503 { "status": "error", "postgres": "up"/"down", "sqs": "up"/"down" }` quando qualquer um falha, sempre com os dois campos presentes para indicar qual dependência está fora do ar. | Nenhuma (endpoint aberto) |
+| `POST` | `/wallets` | Cria uma wallet para `{ playerId, initialBalance: { amount, currency } }`. Responde `201 { id, playerId, balance: { amount, currency }, version: 1 }`. Se `initialBalance.amount` for maior que zero, gera internamente uma transação `OPENING` `PROCESSED` + um lançamento `CREDIT` no ledger, tudo na mesma transação SQL. `409` se já existir wallet para o mesmo `(playerId, currency)`; `400` para payload inválido (`currency` fora do formato `AAA`, `amount` com mais de 2 casas decimais, `playerId` vazio). | Nenhuma (ponto de extensão documentado, não implementado) |
+| `GET`  | `/wallets/:walletId` | Consulta o estado atual da wallet. Responde `200 { id, playerId, balance: { amount, currency }, version }`; `404` se o `walletId` não existir. | Nenhuma (idem) |
 
 ## Pré-requisitos
 
@@ -123,14 +126,16 @@ src/
 │   ├── wager-transaction.ts   # WagerTransaction: máquina de estados (create/createOpening/rehydrate), sem ORM
 │   └── wallet-ledger-entry.ts  # WalletLedgerEntry: lançamento estruturalmente imutável (create/rehydrate/isBalanced), sem ORM
 ├── application/       # casos de uso (reutilizados por HTTP e SQS)
-│   └── ports/         # interfaces de repositório (WalletRepository/WagerTransactionRepository/WalletLedgerEntryRepository) + cursor assinado do ledger — nunca importa MikroORM/NestJS
+│   ├── ports/          # interfaces de repositório (WalletRepository/WagerTransactionRepository/WalletLedgerEntryRepository) + cursor assinado do ledger — nunca importa MikroORM/NestJS
+│   └── use-cases/      # CreateWalletUseCase, GetWalletUseCase
 ├── infrastructure/     # MikroORM, cliente SQS, adaptadores concretos
 │   ├── config/        # validação tipada de variáveis de ambiente (AppConfigModule/AppConfigService)
 │   ├── database/      # conexão MikroORM (DatabaseModule), health check do Postgres, migrations/ (tabelas wallets, wager_transactions e wallet_ledger_entries)
 │   ├── messaging/      # cliente SQS (SqsModule), health check do SQS, nomes das filas
 │   └── persistence/    # entidades MikroORM e repositórios concretos (Wallet/WagerTransaction/WalletLedgerEntry) — a conversão string ↔ Money mora aqui
 └── presentation/       # controllers HTTP / consumer SQS — adaptadores finos
-    └── health/         # GET /health/live, GET /health/ready
+    ├── health/         # GET /health/live, GET /health/ready
+    └── wallets/        # POST /wallets, GET /wallets/:walletId (WalletsController + WalletsModule)
 ```
 
 ## Migrations
@@ -151,10 +156,11 @@ Nenhuma migration roda automaticamente no boot da aplicação — são sempre co
 | `Migration20261112175001_CreateWallets` | Tabela `wallets`: `id`, `player_id`, `currency`, `balance_amount`, `version`, `created_at`, `updated_at`, com `UNIQUE (player_id, currency)`, `CHECK (balance_amount >= 0)` e `CHECK` de formato de moeda (3 letras maiúsculas) |
 | `Migration20261112192841_CreateWagerTransactions` | Tabela `wager_transactions` (18 colunas, incluindo `kind`, `status`, `money_amount`/`money_currency`), com `UNIQUE (idempotency_key)`, `UNIQUE (provider_id, external_transaction_id)`, FK `wallet_id` → `wallets.id` e FK auto-referencial `reference_transaction_id` (ambas `ON DELETE RESTRICT`), `CHECK` fechado de `kind`/`status`, `CHECK` de formato de moeda e um índice não único em `(provider_id, reference_external_transaction_id)` |
 | `Migration20261112222253_CreateWalletLedgerEntries` | Tabela `wallet_ledger_entries` (9 colunas: `id`, `wallet_id`, `transaction_id`, `direction`, `money_amount`/`money_currency`, `balance_before_amount`, `balance_after_amount`, `created_at`), com `UNIQUE (wallet_id, transaction_id)`, FKs `wallet_id` → `wallets.id` e `transaction_id` → `wager_transactions.id` (ambas `ON DELETE RESTRICT`), `CHECK` fechado de `direction`, `CHECK` de formato de moeda e `CHECK` da consistência aritmética do lançamento — nenhuma coluna de status/estado mutável |
+| `Migration20261113090000_WagerTransactionsOpeningFieldsNullable` | Altera `wager_transactions`: `provider_id`/`external_transaction_id`/`round_id`/`game_id`/`payload_hash` deixam de ser `NOT NULL` na coluna, e ganham a constraint `CHECK wager_transactions_opening_fields_null_check`, que exige os cinco campos `NULL` quando `kind = 'OPENING'` e `NOT NULL` em qualquer outro `kind` |
 
 ## Repositórios e lock pessimista
 
-Os repositórios concretos vivem em `src/infrastructure/persistence/` (`wallet.repository.ts`, `wager-transaction.repository.ts`, `wallet-ledger-entry.repository.ts`), cada um implementando a porta correspondente de `src/application/ports/`. Ainda não há caso de uso nem rota consumindo-os — são exercidos hoje só pelos testes de integração, que rodam contra o Postgres real do Compose:
+Os repositórios concretos vivem em `src/infrastructure/persistence/` (`wallet.repository.ts`, `wager-transaction.repository.ts`, `wallet-ledger-entry.repository.ts`), cada um implementando a porta correspondente de `src/application/ports/`. São exercidos pelos testes de integração abaixo, que rodam contra o Postgres real do Compose, e também pelo fluxo real de `POST /wallets`/`GET /wallets/:walletId` (seção "Wallets", mais abaixo):
 
 ```bash
 bun run migration:up
@@ -177,6 +183,41 @@ docker compose exec postgres psql -U wagering -d wagering_dev
 BEGIN;
 SELECT * FROM wallets WHERE id = '<mesmo id da sessão A>' FOR UPDATE;
 -- Esperado: esta query FICA BLOQUEADA até a sessão A fazer COMMIT/ROLLBACK.
+```
+
+## Wallets
+
+Primeiro fluxo ponta a ponta do sistema. Com a aplicação no ar (`bun run start:dev`, porta `3000` por padrão):
+
+```bash
+# Criar uma wallet com saldo inicial positivo (gera OPENING + lançamento CREDIT, na mesma transação SQL)
+curl -i -X POST http://localhost:3000/wallets \
+  -H "Content-Type: application/json" \
+  -d '{"playerId":"<uuid qualquer>","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+# Esperado: 201, corpo { id, playerId, balance: { amount: "1000.00", currency: "BRL" }, version: 1 }
+
+# Consultar a wallet criada (copie o "id" da resposta anterior)
+curl -i http://localhost:3000/wallets/<id>
+# Esperado: 200, mesmo corpo
+
+# Repetir o POST com o mesmo playerId/currency
+curl -i -X POST http://localhost:3000/wallets -H "Content-Type: application/json" \
+  -d '{"playerId":"<mesmo uuid>","initialBalance":{"amount":"500.00","currency":"BRL"}}'
+# Esperado: 409, nenhuma wallet nova criada
+
+# Consultar um id inexistente
+curl -i http://localhost:3000/wallets/00000000-0000-0000-0000-000000000000
+# Esperado: 404
+
+# Conferir no banco: OPENING/PROCESSED com os campos de provedor nulos, e o lançamento CREDIT
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "SELECT kind, status, provider_id, external_transaction_id, round_id, game_id, payload_hash, money_amount FROM wager_transactions WHERE wallet_id = '<id>';"
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "SELECT direction, money_amount, balance_before_amount, balance_after_amount FROM wallet_ledger_entries WHERE wallet_id = '<id>';"
+```
+
+```bash
+bun test src/presentation/wallets/wallets.e2e.spec.ts   # suíte automatizada do fluxo acima, contra o Postgres real do Compose
 ```
 
 ## Docker Compose

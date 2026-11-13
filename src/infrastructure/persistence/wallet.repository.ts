@@ -33,6 +33,11 @@ export function walletToEntityData(wallet: Wallet): Required<Pick<WalletEntity, 
 export class WalletMikroOrmRepository implements WalletRepository {
   constructor(private readonly em: EntityManager) {}
 
+  async findById(id: string): Promise<Wallet | null> {
+    const entity = await this.em.findOne(WalletEntity, { id });
+    return entity ? walletToDomain(entity) : null;
+  }
+
   async findByIdForUpdate(id: string): Promise<Wallet | null> {
     const entity = await this.em.findOne(WalletEntity, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE });
     return entity ? walletToDomain(entity) : null;

@@ -216,21 +216,26 @@ describe("wager_transactions table schema (migration:up)", () => {
 
     const notNullable = [
       "id",
-      "provider_id",
-      "external_transaction_id",
       "idempotency_key",
-      "payload_hash",
       "wallet_id",
       "player_id",
-      "round_id",
-      "game_id",
       "kind",
       "money_amount",
       "money_currency",
       "status",
       "created_at",
     ];
-    const nullable = ["reference_external_transaction_id", "reference_transaction_id", "failure_code", "processed_at"];
+    const nullable = [
+      "provider_id",
+      "external_transaction_id",
+      "round_id",
+      "game_id",
+      "payload_hash",
+      "reference_external_transaction_id",
+      "reference_transaction_id",
+      "failure_code",
+      "processed_at",
+    ];
 
     for (const name of notNullable) {
       expect(nullability.get(name)).toBe("NO");

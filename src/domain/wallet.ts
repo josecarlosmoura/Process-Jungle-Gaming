@@ -22,6 +22,20 @@ export class InsufficientFundsError extends Error {
   }
 }
 
+export class WalletAlreadyExistsError extends Error {
+  constructor(playerId: string, currency: string) {
+    super(`A wallet already exists for playerId "${playerId}" and currency "${currency}"`);
+    this.name = "WalletAlreadyExistsError";
+  }
+}
+
+export class WalletNotFoundError extends Error {
+  constructor(walletId: string) {
+    super(`Wallet "${walletId}" was not found`);
+    this.name = "WalletNotFoundError";
+  }
+}
+
 export class Wallet {
   private constructor(
     public readonly id: string,

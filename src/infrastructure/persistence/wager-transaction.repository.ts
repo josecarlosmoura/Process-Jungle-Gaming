@@ -9,18 +9,18 @@ import { WagerTransactionEntity } from "./wager-transaction.entity";
 export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerTransaction {
   return WagerTransaction.rehydrate({
     id: entity.id,
-    providerId: entity.providerId,
-    externalTransactionId: entity.externalTransactionId,
+    // Colunas nullable devolvem "null" do driver, nunca "undefined"; o domínio usa "undefined"
+    // para "ausente", então toda coluna nullable converte explicitamente nesta borda.
+    providerId: entity.providerId ?? undefined,
+    externalTransactionId: entity.externalTransactionId ?? undefined,
     idempotencyKey: entity.idempotencyKey,
-    payloadHash: entity.payloadHash,
+    payloadHash: entity.payloadHash ?? undefined,
     walletId: entity.walletId,
     playerId: entity.playerId,
-    roundId: entity.roundId,
-    gameId: entity.gameId,
+    roundId: entity.roundId ?? undefined,
+    gameId: entity.gameId ?? undefined,
     kind: entity.kind as WagerTransactionKind,
     money: Money.from({ amount: entity.moneyAmount, currency: entity.moneyCurrency }),
-    // A coluna é nullable - o driver devolve "null", nunca "undefined"; o domínio usa "undefined"
-    // para "ausente", então essa borda converte explicitamente.
     referenceExternalTransactionId: entity.referenceExternalTransactionId ?? undefined,
     createdAt: entity.createdAt,
     status: entity.status as WagerTransactionStatus,
@@ -33,23 +33,21 @@ export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerT
 export function wagerTransactionToEntityData(transaction: WagerTransaction): Required<
   Pick<
     WagerTransactionEntity,
-    | "id"
-    | "providerId"
-    | "externalTransactionId"
-    | "idempotencyKey"
-    | "payloadHash"
-    | "walletId"
-    | "playerId"
-    | "roundId"
-    | "gameId"
-    | "kind"
-    | "moneyAmount"
-    | "moneyCurrency"
-    | "status"
-    | "createdAt"
+    "id" | "idempotencyKey" | "walletId" | "playerId" | "kind" | "moneyAmount" | "moneyCurrency" | "status" | "createdAt"
   >
 > &
-  Pick<WagerTransactionEntity, "referenceExternalTransactionId" | "referenceTransactionId" | "failureCode" | "processedAt"> {
+  Pick<
+    WagerTransactionEntity,
+    | "providerId"
+    | "externalTransactionId"
+    | "payloadHash"
+    | "roundId"
+    | "gameId"
+    | "referenceExternalTransactionId"
+    | "referenceTransactionId"
+    | "failureCode"
+    | "processedAt"
+  > {
   return {
     id: transaction.id,
     providerId: transaction.providerId,

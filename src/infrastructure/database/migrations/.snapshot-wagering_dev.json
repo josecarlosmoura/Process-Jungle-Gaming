@@ -55,7 +55,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": true,
           "length": null,
           "precision": null,
@@ -71,7 +71,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": null,
           "precision": null,
@@ -103,7 +103,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": null,
           "precision": null,
@@ -151,7 +151,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": null,
           "precision": null,
@@ -167,7 +167,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": null,
           "precision": null,
@@ -387,6 +387,12 @@
           "columnName": "money_currency",
           "definition": "CHECK ((money_currency ~ '^[A-Z]{3}$'::text))",
           "expression": "money_currency ~ '^[A-Z]{3}$'::text"
+        },
+        {
+          "name": "wager_transactions_opening_fields_null_check",
+          "columnName": "payload_hash",
+          "definition": "CHECK ((((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))))",
+          "expression": "((kind = 'OPENING'::text) AND (provider_id IS NULL) AND (external_transaction_id IS NULL) AND (round_id IS NULL) AND (game_id IS NULL) AND (payload_hash IS NULL)) OR ((kind <> 'OPENING'::text) AND (provider_id IS NOT NULL) AND (external_transaction_id IS NOT NULL) AND (round_id IS NOT NULL) AND (game_id IS NOT NULL) AND (payload_hash IS NOT NULL))"
         }
       ],
       "foreignKeys": {

@@ -23,18 +23,27 @@ export interface CreateWagerTransactionProps {
   referenceExternalTransactionId?: string;
 }
 
-export type CreateOpeningWagerTransactionProps = Omit<CreateWagerTransactionProps, "kind" | "referenceExternalTransactionId">;
+export interface CreateOpeningWagerTransactionProps {
+  id: string;
+  idempotencyKey: string;
+  walletId: string;
+  playerId: string;
+  money: Money;
+}
 
 export interface WagerTransactionState {
   id: string;
-  providerId: string;
-  externalTransactionId: string;
+  // Ausentes (undefined) exatamente quando kind = "OPENING": essa transação é gerada
+  // internamente, sem provedor/rodada/jogo reais por tras - a constraint de banco garante o
+  // inverso (NOT NULL para qualquer outro kind).
+  providerId?: string;
+  externalTransactionId?: string;
   idempotencyKey: string;
-  payloadHash: string;
+  payloadHash?: string;
   walletId: string;
   playerId: string;
-  roundId: string;
-  gameId: string;
+  roundId?: string;
+  gameId?: string;
   kind: WagerTransactionKind;
   money: Money;
   referenceExternalTransactionId?: string;
@@ -71,14 +80,14 @@ export class LedgerDirectionNotApplicableError extends Error {
 export class WagerTransaction {
   private constructor(
     public readonly id: string,
-    public readonly providerId: string,
-    public readonly externalTransactionId: string,
+    public readonly providerId: string | undefined,
+    public readonly externalTransactionId: string | undefined,
     public readonly idempotencyKey: string,
-    public readonly payloadHash: string,
+    public readonly payloadHash: string | undefined,
     public readonly walletId: string,
     public readonly playerId: string,
-    public readonly roundId: string,
-    public readonly gameId: string,
+    public readonly roundId: string | undefined,
+    public readonly gameId: string | undefined,
     public readonly kind: WagerTransactionKind,
     public readonly money: Money,
     public readonly referenceExternalTransactionId: string | undefined,
@@ -100,18 +109,6 @@ export class WagerTransaction {
         `kind "${props.kind}" requires a non-empty referenceExternalTransactionId`,
       );
     }
-    return WagerTransaction.instantiate(props.kind, props.referenceExternalTransactionId, props);
-  }
-
-  static createOpening(props: CreateOpeningWagerTransactionProps): WagerTransaction {
-    return WagerTransaction.instantiate("OPENING", undefined, props);
-  }
-
-  private static instantiate(
-    kind: WagerTransactionKind,
-    referenceExternalTransactionId: string | undefined,
-    props: CreateOpeningWagerTransactionProps,
-  ): WagerTransaction {
     return new WagerTransaction(
       props.id,
       props.providerId,
@@ -122,9 +119,28 @@ export class WagerTransaction {
       props.playerId,
       props.roundId,
       props.gameId,
-      kind,
+      props.kind,
       props.money,
-      referenceExternalTransactionId,
+      props.referenceExternalTransactionId,
+      new Date(),
+      "PENDING",
+    );
+  }
+
+  static createOpening(props: CreateOpeningWagerTransactionProps): WagerTransaction {
+    return new WagerTransaction(
+      props.id,
+      undefined,
+      undefined,
+      props.idempotencyKey,
+      undefined,
+      props.walletId,
+      props.playerId,
+      undefined,
+      undefined,
+      "OPENING",
+      props.money,
+      undefined,
       new Date(),
       "PENDING",
     );

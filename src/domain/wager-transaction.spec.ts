@@ -38,14 +38,9 @@ function buildProps(overrides: Partial<CreateWagerTransactionProps> = {}): Creat
 function buildOpeningProps(overrides: Partial<CreateOpeningWagerTransactionProps> = {}): CreateOpeningWagerTransactionProps {
   return {
     id: nextId("tx"),
-    providerId: "provider-1",
-    externalTransactionId: nextId("ext"),
     idempotencyKey: nextId("idem"),
-    payloadHash: "hash-1",
     walletId: "wallet-1",
     playerId: "player-1",
-    roundId: "round-1",
-    gameId: "game-1",
     money: Money.from({ amount: "100.00", currency: "BRL" }),
     ...overrides,
   };
@@ -116,6 +111,17 @@ describe("WagerTransaction", () => {
     const transaction = WagerTransaction.createOpening(buildOpeningProps());
     expect(transaction.kind).toBe("OPENING");
     expect(transaction.status).toBe("PENDING");
+  });
+
+  test("createOpening returns providerId, externalTransactionId, roundId, gameId and payloadHash all undefined, with a non-empty idempotencyKey", () => {
+    const transaction = WagerTransaction.createOpening(buildOpeningProps({ idempotencyKey: "internal:wallet-1" }));
+
+    expect(transaction.providerId).toBeUndefined();
+    expect(transaction.externalTransactionId).toBeUndefined();
+    expect(transaction.roundId).toBeUndefined();
+    expect(transaction.gameId).toBeUndefined();
+    expect(transaction.payloadHash).toBeUndefined();
+    expect(transaction.idempotencyKey).toBe("internal:wallet-1");
   });
 
   test("markProcessed over a PENDING transaction moves it to PROCESSED and records the reference and processedAt", () => {
