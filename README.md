@@ -79,7 +79,7 @@ Outros comandos úteis:
 
 ```bash
 bun run build            # compila para dist/
-bun run start            # roda o build compilado (dist/main.js)
+bun run start            # roda o build compilado (dist/main.js) — também o que o debugger do VS Code usa (.vscode/launch.json)
 bun run lint              # Biome lint
 bun run format:check       # Biome format (checagem, sem escrever)
 bun test                  # suíte de testes (Bun test runner)
@@ -112,6 +112,8 @@ Todas são validadas no boot (`src/infrastructure/config/env.schema.ts`, via `zo
 
 - No cliente, use o host `127.0.0.1` em vez de `localhost` (força IPv4); ou
 - Troque `DB_PORT` no seu `.env` **local** (nunca no `.env.example`) para uma porta livre (ex.: `5440`) e suba o Compose de novo.
+
+**Troubleshooting — `SyntaxError: Invalid or unexpected token` ao rodar `node dist/main.js` (ex.: via "Debug API (Node)" do VS Code):** já corrigido — `src/infrastructure/database/mikro-orm.config.ts` decide `preferTs` pelo runtime atual (`typeof Bun !== "undefined"`), nunca um valor fixo. Sob Bun (`bun run start:dev`, testes) usa os caminhos `.ts`; sob Node puro (`dist/main.js`, debugger) usa os `.js` já compilados em `dist/` — rode `bun run build` antes (o `preLaunchTask` do `.vscode/launch.json` já faz isso).
 
 ## Estrutura de pastas
 

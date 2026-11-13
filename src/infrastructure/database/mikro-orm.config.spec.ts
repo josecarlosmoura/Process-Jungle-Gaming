@@ -17,6 +17,18 @@ describe("buildMikroOrmOptions", () => {
     expect(options.password).toBe("some-custom-password");
     expect(options.dbName).toBe("some_custom_db");
   });
+
+  test("preferTs is true under Bun (this test itself runs via bun test) - plain Node running compiled dist/ needs it false, or it would require() a .ts entity file and crash", () => {
+    const options = buildMikroOrmOptions({
+      dbHost: "some-custom-host",
+      dbPort: 54321,
+      dbUser: "some-custom-user",
+      dbPassword: "some-custom-password",
+      dbName: "some_custom_db",
+    });
+
+    expect(options.preferTs).toBe(true);
+  });
 });
 
 describe("resolveCliMikroOrmOptions", () => {

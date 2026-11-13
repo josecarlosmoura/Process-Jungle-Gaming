@@ -42,6 +42,23 @@ async function deleteWagerTransaction(id: string): Promise<void> {
   await connection.execute("delete from wager_transactions where id = ?", [id]);
 }
 
+async function insertLedgerEntry(id: string, walletId: string, transactionId: string): Promise<void> {
+  await connection.execute(
+    `insert into wallet_ledger_entries
+       (id, wallet_id, transaction_id, direction, money_amount, money_currency, balance_before_amount, balance_after_amount, created_at)
+     values (?, ?, ?, 'CREDIT', '100.00', 'BRL', '0.00', '100.00', now())`,
+    [id, walletId, transactionId],
+  );
+}
+
+async function columnIsNotNullable(table: string, column: string): Promise<boolean> {
+  const rows = await connection.execute<{ is_nullable: "YES" | "NO" }[]>(
+    `select is_nullable from information_schema.columns where table_name = ? and column_name = ?`,
+    [table, column],
+  );
+  return rows[0]?.is_nullable === "NO";
+}
+
 interface InsertParams {
   id: string;
   walletId: string;
@@ -172,4 +189,36 @@ describe("wager_transactions opening-fields nullability (migration:up)", () => {
       await deleteWallet(walletId);
     }
   });
+});
+
+describe("wager_transactions opening-fields nullability (migration:down reverts cleanly even with existing OPENING data)", () => {
+  test(
+    "migration:down succeeds with an OPENING transaction and its ledger entry already persisted, and restores NOT NULL",
+    async () => {
+      ensureMigrationApplied();
+      const walletId = await createWallet();
+      const transactionId = randomUUID();
+      const ledgerId = randomUUID();
+      await insertWagerTransaction(openingParams(transactionId, walletId));
+      await insertLedgerEntry(ledgerId, walletId, transactionId);
+
+      try {
+        // reverte so esta migration (a mais recente no momento) - nao deve lancar mesmo com a
+        // OPENING/ledger acima ainda persistidos.
+        expect(() => execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" })).not.toThrow();
+
+        expect(await columnIsNotNullable("wager_transactions", "provider_id")).toBe(true);
+
+        const remaining = await connection.execute<{ count: string }[]>(
+          "select count(*) as count from wager_transactions where id = ?",
+          [transactionId],
+        );
+        expect(Number(remaining[0]?.count)).toBe(0);
+      } finally {
+        ensureMigrationApplied();
+        await deleteWallet(walletId);
+      }
+    },
+    15_000,
+  );
 });

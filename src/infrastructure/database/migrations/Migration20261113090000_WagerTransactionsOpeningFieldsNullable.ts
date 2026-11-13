@@ -38,6 +38,18 @@ export class Migration20261113090000_WagerTransactionsOpeningFieldsNullable exte
   override async down(): Promise<void> {
     this.addSql(`alter table "wager_transactions" drop constraint "wager_transactions_opening_fields_null_check";`);
 
+    // Qualquer linha OPENING ja persistida tem os 5 campos NULL (e e exatamente o que esta
+    // migration existe para permitir) - "set not null" abaixo rejeitaria o down() caso uma
+    // dessas linhas ainda exista. down() aqui e so para desfazer o schema em ambiente de
+    // desenvolvimento/teste, nunca uma migracao de dados para producao (mesma postura das
+    // outras migrations deste diretorio, cujo down() tambem descarta dados via DROP TABLE
+    // CASCADE) - por isso qualquer OPENING e seu lancamento de ledger sao descartados aqui.
+    this.addSql(`
+      delete from "wallet_ledger_entries"
+      where "transaction_id" in (select "id" from "wager_transactions" where "kind" = 'OPENING');
+    `);
+    this.addSql(`delete from "wager_transactions" where "kind" = 'OPENING';`);
+
     this.addSql(`
       alter table "wager_transactions"
         alter column "provider_id" set not null,

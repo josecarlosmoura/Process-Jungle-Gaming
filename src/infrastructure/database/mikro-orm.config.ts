@@ -22,10 +22,13 @@ export function buildMikroOrmOptions(env: DatabaseConnectionEnv): Options {
     // Postgres no ar. A conexao real so e aberta lazily na primeira query (ensureConnection()),
     // que e exatamente o que PostgresHealthIndicator exercita.
     connect: false,
-    // forcado para nao depender da heuristica de deteccao de ts-node do MikroORM,
-    // que nao reconhece o runtime do Bun - sem isto a CLI procuraria migrations
-    // compiladas em dist/, que nao existem no fluxo local (bun direto sobre o src/ts)
-    preferTs: true,
+    // A deteccao de ts-node do MikroORM nao reconhece o runtime do Bun, entao decide-se aqui
+    // explicitamente por runtime: sob Bun (bun run start:dev, testes), os entities/migrations
+    // ainda nao foram compilados em dist/ - precisa dos caminhos *Ts (src/**/*.ts); sob Node puro
+    // (dist/main.js, via "bun run start" ou um debugger) so os .js compilados existem de verdade,
+    // e exigir os caminhos *Ts faria o Node tentar fazer require() de um .ts com decorators, que
+    // ele nao sabe parsear (SyntaxError).
+    preferTs: typeof Bun !== "undefined",
     entities: ["./dist/**/*.entity.js"],
     entitiesTs: ["./src/**/*.entity.ts"],
     // nenhuma entidade de dominio existe ainda (chega a partir de T102) - sem isto, o
