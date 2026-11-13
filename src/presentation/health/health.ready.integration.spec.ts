@@ -11,7 +11,7 @@ describe("GET /health/ready", () => {
       DB_PORT: "5440",
       DB_USER: "wagering",
       DB_PASSWORD: "wagering",
-      DB_NAME: "wagering_dev",
+      DB_NAME: "wagering_test",
       LOCALSTACK_ENDPOINT: "http://localhost:4566",
       AWS_REGION: "us-east-1",
       AWS_ACCESS_KEY_ID: "test",

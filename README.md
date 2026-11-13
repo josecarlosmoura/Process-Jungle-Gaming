@@ -71,6 +71,10 @@ aws --endpoint-url=http://localhost:4566 sqs list-queues
 # 5. Aplicar as migrations contra o Postgres do Compose
 bun run migration:up
 
+# 5b. Criar o banco de teste (uma vez só) — ver "Banco de dados de teste" abaixo
+docker compose exec postgres psql -U wagering -d wagering_dev -c "CREATE DATABASE wagering_test OWNER wagering;"
+DB_NAME=wagering_test bun run migration:up
+
 # 6. Subir a aplicação NestJS em modo desenvolvimento (hot reload)
 bun run start:dev
 ```
@@ -93,6 +97,19 @@ bun run migration:down      # reverte a última migration aplicada
 docker compose down        # derruba os serviços (mantém os dados, pois o volume do Postgres é nomeado)
 docker compose logs -f postgres   # acompanhar logs do Postgres em tempo real
 ```
+
+## Banco de dados de teste
+
+`bun test`/`bun run test:unit`/`bun run test:integration` rodam contra o banco `wagering_test`, **nunca** `wagering_dev` — os três scripts já sobrescrevem `DB_NAME=wagering_test` (ver `package.json`). Isso é proposital: vários testes de migration fazem `migration:down -- --to 0` (que dá `DROP TABLE ... CASCADE` em tudo) para provar que as migrations são reversíveis; se isso rodasse contra o mesmo banco que você usa para testar manualmente (`curl`, `psql`), cada execução da suíte apagaria qualquer wallet/transação que você tivesse criado à mão.
+
+Setup (uma vez só, por ambiente):
+
+```bash
+docker compose exec postgres psql -U wagering -d wagering_dev -c "CREATE DATABASE wagering_test OWNER wagering;"
+DB_NAME=wagering_test bun run migration:up
+```
+
+Se algum dia a suíte de testes "comer" dados que você criou manualmente em `wagering_dev`, o banco `wagering_test` provavelmente não existe ainda (os scripts caem de volta no `.env`, que aponta para `wagering_dev`) — rode o setup acima.
 
 ## Variáveis de ambiente
 
