@@ -327,6 +327,12 @@ describe("POST /wagering/transactions - conflito de idempotência (payload difer
       expect(conflicting.status).toBe(409);
       expect(conflicting.body.failureCode).toBe("IDEMPOTENCY_CONFLICT");
       expect(await countWhere("wager_transactions", "idempotency_key", idempotencyKey)).toBe(1);
+
+      const rows = await connection.execute<{ balance_amount: string }[]>(
+        "select balance_amount from wallets where id = ?",
+        [walletId],
+      );
+      expect(rows[0]?.balance_amount).toBe("975.00");
     } finally {
       await deleteWalletCascade(walletId);
     }
