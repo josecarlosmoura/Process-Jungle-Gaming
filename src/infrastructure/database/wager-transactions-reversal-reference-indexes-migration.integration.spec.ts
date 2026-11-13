@@ -41,6 +41,31 @@ async function indexInfo(indexName: string): Promise<IndexInfo | undefined> {
   return rows[0];
 }
 
+interface TableSchemaSnapshot {
+  columns: string[];
+  constraints: string[];
+  indexes: string[];
+}
+
+async function wagerTransactionsSchemaSnapshot(): Promise<TableSchemaSnapshot> {
+  const columns = await connection.execute<{ column_name: string; data_type: string; is_nullable: string }[]>(
+    `select column_name, data_type, is_nullable from information_schema.columns
+     where table_schema = 'public' and table_name = 'wager_transactions' order by column_name`,
+  );
+  const constraints = await connection.execute<{ constraint_name: string; constraint_type: string }[]>(
+    `select constraint_name, constraint_type from information_schema.table_constraints
+     where table_schema = 'public' and table_name = 'wager_transactions' order by constraint_name`,
+  );
+  const indexes = await connection.execute<{ indexname: string }[]>(
+    `select indexname from pg_indexes where schemaname = 'public' and tablename = 'wager_transactions' order by indexname`,
+  );
+  return {
+    columns: columns.map((c) => `${c.column_name}:${c.data_type}:${c.is_nullable}`),
+    constraints: constraints.map((c) => `${c.constraint_name}:${c.constraint_type}`),
+    indexes: indexes.map((i) => i.indexname),
+  };
+}
+
 async function ensureMigrationApplied(): Promise<void> {
   // Garante a pre-condicao sem depender da ordem de execucao entre os describes deste arquivo,
   // mas so paga o custo de subir um processo novo (ts-node + bun + reconexao) quando o indice de
@@ -232,26 +257,39 @@ describe("wager_transactions reversal reference indexes (migration:down)", () =>
     "drops both partial unique indexes and leaves the rest of the table unchanged",
     async () => {
       await ensureMigrationApplied();
-      await expect(indexInfo("wager_transactions_refund_reference_unique")).resolves.toBeDefined();
+      const beforeDown = await wagerTransactionsSchemaSnapshot();
+      expect(beforeDown.indexes).toContain("wager_transactions_refund_reference_unique");
+      expect(beforeDown.indexes).toContain("wager_transactions_rollback_reference_unique");
 
       try {
-        // "--to <nome>" mira a migration imediatamente anterior a esta - reverte so esta (e
-        // qualquer uma mais nova), mantendo as anteriores aplicadas; nunca "migration:down" sem
-        // argumento, que desfaz so um passo e quebraria assim que outra migration fosse adicionada
-        // depois desta (mesmo cuidado documentado em wager-transactions-opening-fields-migration).
+        // "--to <nome>" mira esta migration especificamente (reverte ela e qualquer uma mais
+        // nova, mantendo as anteriores aplicadas) - nunca "migration:down" sem argumento, que
+        // desfaz so um passo e quebraria assim que outra migration fosse adicionada depois desta
+        // (mesmo cuidado documentado em wager-transactions-opening-fields-migration). Alvo errado
+        // aqui (a migration anterior, em vez desta) reverteria as duas e derrubaria colunas que
+        // nao pertencem a esta migration - e exatamente isso que o snapshot completo abaixo pega.
         execSync(
-          "bun run migration:down -- --to Migration20261113140000_WagerTransactionsBalanceAfterProcessing",
+          "bun run migration:down -- --to Migration20261113150000_WagerTransactionsReversalReferenceIndexes",
           { cwd: process.cwd(), stdio: "pipe" },
         );
 
-        expect(await indexInfo("wager_transactions_refund_reference_unique")).toBeUndefined();
-        expect(await indexInfo("wager_transactions_rollback_reference_unique")).toBeUndefined();
+        const afterDown = await wagerTransactionsSchemaSnapshot();
 
-        const columns = await connection.execute<{ column_name: string }[]>(
-          `select column_name from information_schema.columns
-           where table_schema = 'public' and table_name = 'wager_transactions'`,
+        expect(afterDown.indexes).not.toContain("wager_transactions_refund_reference_unique");
+        expect(afterDown.indexes).not.toContain("wager_transactions_rollback_reference_unique");
+
+        // Nenhuma outra coluna ou constraint pode ter sido afetada - compara o snapshot completo
+        // de antes (colunas e constraints inalteradas; indices exatamente os de antes menos os
+        // dois que esta migration introduziu), nao so a existencia pontual de uma coluna.
+        expect(afterDown.columns).toEqual(beforeDown.columns);
+        expect(afterDown.constraints).toEqual(beforeDown.constraints);
+        expect(afterDown.indexes).toEqual(
+          beforeDown.indexes.filter(
+            (name) =>
+              name !== "wager_transactions_refund_reference_unique" &&
+              name !== "wager_transactions_rollback_reference_unique",
+          ),
         );
-        expect(columns.map((c) => c.column_name)).toContain("reference_transaction_id");
       } finally {
         // restaura os indices - outros testes deste arquivo assumem que eles existem,
         // independentemente da ordem de execucao

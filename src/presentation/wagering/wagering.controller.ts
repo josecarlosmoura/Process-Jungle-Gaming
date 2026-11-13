@@ -8,22 +8,37 @@ import {
 } from "../../application/use-cases/process-wager-transaction.use-case";
 import { Money, type MoneyProps } from "../../domain/money";
 
-const processWagerTransactionBodySchema = z.object({
-  providerId: z.string().min(1),
-  externalTransactionId: z.string().min(1),
-  playerId: z.string().min(1),
-  walletId: z.string().uuid(),
-  roundId: z.string().min(1),
-  gameId: z.string().min(1),
-  // Validado como string livre, nao enum: identificar qual "kind" nao e suportado (AC 10) e
-  // decisao do use case (nunca espalhada no controller), nao do contrato HTTP.
-  kind: z.string().min(1),
-  money: z.object({
-    amount: z.string(),
-    currency: z.string().regex(/^[A-Z]{3}$/, "must be a 3-letter uppercase currency code"),
-  }),
-  referenceExternalTransactionId: z.string().min(1).optional(),
-});
+// Kinds cuja referencia e obrigatoria - checado aqui, na borda do payload, para que a ausencia
+// vire 400 INVALID_PAYLOAD (zod) e nunca alcance WagerTransaction.create(), cujo throw
+// equivalente e so uma rede de seguranca interna (nao estende DomainError).
+const KINDS_REQUIRING_REFERENCE: ReadonlySet<string> = new Set(["REFUND"]);
+
+const processWagerTransactionBodySchema = z
+  .object({
+    providerId: z.string().min(1),
+    externalTransactionId: z.string().min(1),
+    playerId: z.string().min(1),
+    walletId: z.string().uuid(),
+    roundId: z.string().min(1),
+    gameId: z.string().min(1),
+    // Validado como string livre, nao enum: identificar qual "kind" nao e suportado (AC 10) e
+    // decisao do use case (nunca espalhada no controller), nao do contrato HTTP.
+    kind: z.string().min(1),
+    money: z.object({
+      amount: z.string(),
+      currency: z.string().regex(/^[A-Z]{3}$/, "must be a 3-letter uppercase currency code"),
+    }),
+    referenceExternalTransactionId: z.string().min(1).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (KINDS_REQUIRING_REFERENCE.has(data.kind) && !data.referenceExternalTransactionId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["referenceExternalTransactionId"],
+        message: `referenceExternalTransactionId is required for kind "${data.kind}"`,
+      });
+    }
+  });
 
 interface ProcessWagerTransactionResponseBody {
   transactionId: string;
@@ -73,6 +88,12 @@ export class WageringController {
   private statusFor(result: ProcessWagerTransactionResult): number {
     if (result.status === "REJECTED") {
       return HttpStatus.UNPROCESSABLE_ENTITY;
+    }
+    // PENDING_REFERENCE nao e replay nem rejeicao - a referencia obrigatoria ainda pode se
+    // resolver depois (worker de reprocessamento), entao o status HTTP marca "aceito, mas nao
+    // concluido" mesmo ao repetir a mesma Idempotency-Key enquanto a transacao permanece pendente.
+    if (result.status === "PENDING_REFERENCE") {
+      return HttpStatus.ACCEPTED;
     }
     return result.idempotentReplay ? HttpStatus.OK : HttpStatus.CREATED;
   }

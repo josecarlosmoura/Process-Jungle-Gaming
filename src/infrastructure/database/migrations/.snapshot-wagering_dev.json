@@ -277,7 +277,7 @@
           "autoincrement": false,
           "primary": false,
           "nullable": true,
-          "unique": false,
+          "unique": true,
           "length": null,
           "precision": null,
           "scale": null,
@@ -411,6 +411,28 @@
           "keyName": "wager_transactions_provider_reference_idx",
           "unique": false,
           "primary": false
+        },
+        {
+          "columnNames": [
+            "reference_transaction_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "wager_transactions_refund_reference_unique",
+          "unique": true,
+          "primary": false,
+          "expression": "CREATE UNIQUE INDEX wager_transactions_refund_reference_unique ON public.wager_transactions USING btree (reference_transaction_id) WHERE ((kind = 'REFUND'::text) AND (reference_transaction_id IS NOT NULL))"
+        },
+        {
+          "columnNames": [
+            "reference_transaction_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "wager_transactions_rollback_reference_unique",
+          "unique": true,
+          "primary": false,
+          "expression": "CREATE UNIQUE INDEX wager_transactions_rollback_reference_unique ON public.wager_transactions USING btree (reference_transaction_id) WHERE ((kind = 'ROLLBACK'::text) AND (reference_transaction_id IS NOT NULL))"
         }
       ],
       "checks": [

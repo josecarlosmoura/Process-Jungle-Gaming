@@ -3,6 +3,7 @@ import { Inject, Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { PayloadValidationError, ResourceConflictError, TransientInfrastructureError } from "../../domain/domain-error";
+import type { FailureCode } from "../../domain/failure-code";
 import { CurrencyMismatchError, type Money, type MoneyProps } from "../../domain/money";
 import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
@@ -64,7 +65,7 @@ export class IdempotencyConflictError extends ResourceConflictError {
 // constraints, 42xxx sintaxe), entao a deteccao e pelo .code bruto preservado em DriverException.
 const LOCK_NOT_AVAILABLE_SQLSTATE = "55P03";
 
-const SUPPORTED_KINDS: ReadonlySet<string> = new Set(["BET", "WIN", "LOSS"]);
+const SUPPORTED_KINDS: ReadonlySet<string> = new Set(["BET", "WIN", "LOSS", "REFUND"]);
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
@@ -79,8 +80,8 @@ export class ProcessWagerTransactionUseCase {
   ) {}
 
   async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
-    // Restricao temporaria, ate REFUND/ROLLBACK ganharem suporte - mora aqui, nao no controller,
-    // para nao espalhar logica de negocio sobre kind pela camada de apresentacao.
+    // Restricao temporaria, ate ROLLBACK ganhar suporte - mora aqui, nao no controller, para nao
+    // espalhar logica de negocio sobre kind pela camada de apresentacao.
     if (!SUPPORTED_KINDS.has(command.kind)) {
       throw new UnsupportedWagerTransactionKindError(command.kind);
     }
@@ -149,6 +150,9 @@ export class ProcessWagerTransactionUseCase {
 
     if (!transaction.affectsBalance()) {
       return this.processWithoutBalanceEffect(transaction, wallet);
+    }
+    if (transaction.kind === "REFUND") {
+      return this.processRefund(transaction, wallet, command);
     }
     return this.processWithBalanceEffect(transaction, wallet, command);
   }
@@ -264,6 +268,106 @@ export class ProcessWagerTransactionUseCase {
     return {
       transactionId: transaction.id,
       status: transaction.status,
+      balance: wallet.balance.toJSON(),
+      idempotentReplay: false,
+    };
+  }
+
+  private async processRefund(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    command: ProcessWagerTransactionCommand,
+  ): Promise<ProcessWagerTransactionResult> {
+    // WagerTransaction.create() ja exige referenceExternalTransactionId para "REFUND", e o zod do
+    // controller rejeita a ausencia como INVALID_PAYLOAD antes de chegar aqui - garantido presente.
+    const resolution = await this.referenceResolver.resolve({
+      providerId: command.providerId,
+      referenceExternalTransactionId: command.referenceExternalTransactionId as string,
+      playerId: command.playerId,
+      walletId: command.walletId,
+      roundId: command.roundId,
+      money: command.money,
+      reversalKind: "REFUND",
+    });
+
+    if (resolution.outcome === "NOT_FOUND") {
+      // A referencia obrigatoria de um REFUND ainda pode se resolver depois (worker de
+      // reprocessamento), entao nunca rejeita de imediato so por ainda nao existir - diferente da
+      // referencia opcional de WIN, que rejeita qualquer outcome que nao seja RESOLVED.
+      transaction.markPendingReference();
+      await this.wagerTransactionRepository.save(transaction);
+      return {
+        transactionId: transaction.id,
+        status: transaction.status,
+        balance: wallet.balance.toJSON(),
+        idempotentReplay: false,
+      };
+    }
+    if (resolution.outcome === "UNRESOLVABLE") {
+      return this.rejectRefund(transaction, wallet, "REFERENCE_NOT_FOUND");
+    }
+    if (resolution.outcome === "ALREADY_REVERSED") {
+      return this.rejectRefund(transaction, wallet, "REFERENCE_ALREADY_REVERSED");
+    }
+    // REFUND so reverte uma BET - qualquer outro kind resolvido e tao invalido quanto uma
+    // referencia divergente nos 5 campos, pelo mesmo failureCode (ARCHITECTURE.md secao 9: "um
+    // tipo/estado que a operacao que a referencia nao aceita"). Essa checagem de kind e
+    // responsabilidade de quem chama, nao do ReferenceResolver (ROLLBACK aceita outros kinds).
+    if (resolution.outcome !== "RESOLVED" || resolution.reference.kind !== "BET") {
+      return this.rejectRefund(transaction, wallet, "REFERENCE_MISMATCH");
+    }
+
+    const reference = resolution.reference;
+    // Reversao parcial esta fora de escopo - o valor precisa ser exatamente o da BET original
+    // (nao so a mesma moeda, ja garantida pelo ReferenceResolver).
+    if (!command.money.equals(reference.money)) {
+      return this.rejectRefund(transaction, wallet, "REFERENCE_AMOUNT_MISMATCH");
+    }
+
+    const balanceBefore = wallet.balance;
+    try {
+      wallet.credit(command.money);
+    } catch (error) {
+      if (error instanceof CurrencyMismatchError) {
+        return this.rejectRefund(transaction, wallet, "CURRENCY_MISMATCH");
+      }
+      throw error;
+    }
+
+    transaction.markProcessed(reference.id, new Date());
+    const ledgerEntry = WalletLedgerEntry.create({
+      id: randomUUID(),
+      walletId: wallet.id,
+      transactionId: transaction.id,
+      direction: transaction.ledgerDirectionFor(),
+      money: command.money,
+      balanceBefore,
+      balanceAfter: wallet.balance,
+    });
+
+    await this.wagerTransactionRepository.save(transaction);
+    await this.walletLedgerEntryRepository.save(ledgerEntry);
+    await this.walletRepository.save(wallet);
+
+    return {
+      transactionId: transaction.id,
+      status: transaction.status,
+      balance: wallet.balance.toJSON(),
+      idempotentReplay: false,
+    };
+  }
+
+  private async rejectRefund(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    code: FailureCode,
+  ): Promise<ProcessWagerTransactionResult> {
+    transaction.reject(code);
+    await this.wagerTransactionRepository.save(transaction);
+    return {
+      transactionId: transaction.id,
+      status: transaction.status,
+      failureCode: transaction.failureCode,
       balance: wallet.balance.toJSON(),
       idempotentReplay: false,
     };
