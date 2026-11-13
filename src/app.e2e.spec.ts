@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
@@ -42,5 +43,37 @@ describe("AppModule boot", () => {
     expect(response.status).toBe(200);
 
     await app.close();
+  });
+
+  test("GET /wallets/:walletId for an unknown id through the full AppModule returns 404 via the global exception filter", async () => {
+    Object.assign(process.env, {
+      DB_HOST: "localhost",
+      DB_PORT: "5440",
+      DB_USER: "wagering",
+      DB_PASSWORD: "wagering",
+      DB_NAME: "wagering_test",
+      LOCALSTACK_ENDPOINT: "http://localhost:4566",
+      AWS_REGION: "us-east-1",
+      AWS_ACCESS_KEY_ID: "test",
+      AWS_SECRET_ACCESS_KEY: "test",
+      PORT: "4311",
+    });
+
+    const { AppModule } = await import("./app.module");
+    const { AppConfigService } = await import("./infrastructure/config/app-config.service");
+
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const app: INestApplication = moduleRef.createNestApplication();
+    const config = app.get(AppConfigService);
+    await app.init();
+    await app.listen(config.port);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${config.port}/wallets/${randomUUID()}`);
+
+      expect(response.status).toBe(404);
+    } finally {
+      await app.close();
+    }
   });
 });

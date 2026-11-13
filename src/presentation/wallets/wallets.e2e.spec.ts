@@ -66,6 +66,7 @@ interface WalletResponseBody {
   playerId: string;
   balance: { amount: string; currency: string };
   version: number;
+  failureCode?: string;
 }
 
 async function postWallet(body: unknown): Promise<{ status: number; body: WalletResponseBody }> {
@@ -230,6 +231,7 @@ describe("POST /wallets - wallet duplicada", () => {
 
       const second = await postWallet({ playerId, initialBalance: { amount: "500.00", currency: "BRL" } });
       expect(second.status).toBe(409);
+      expect(second.body.failureCode).toBeUndefined();
 
       const fetched = await getWallet(first.body.id);
       expect(fetched.status).toBe(200);

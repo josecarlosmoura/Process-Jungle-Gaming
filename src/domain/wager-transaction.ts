@@ -1,3 +1,4 @@
+import type { FailureCode } from "./failure-code";
 import type { Money } from "./money";
 
 export type WagerTransactionKind = "OPENING" | "BET" | "WIN" | "LOSS" | "REFUND" | "ROLLBACK";
@@ -5,8 +6,6 @@ export type WagerTransactionKind = "OPENING" | "BET" | "WIN" | "LOSS" | "REFUND"
 export type WagerTransactionStatus = "PENDING" | "PENDING_REFERENCE" | "PROCESSED" | "REJECTED" | "FAILED";
 
 export type LedgerDirection = "DEBIT" | "CREDIT";
-
-export type FailureCode = string;
 
 export interface CreateWagerTransactionProps {
   id: string;

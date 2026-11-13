@@ -1,3 +1,4 @@
+import { ResourceConflictError, ResourceNotFoundError } from "./domain-error";
 import { CurrencyMismatchError, type Money } from "./money";
 
 export interface WalletOpenProps {
@@ -22,14 +23,14 @@ export class InsufficientFundsError extends Error {
   }
 }
 
-export class WalletAlreadyExistsError extends Error {
+export class WalletAlreadyExistsError extends ResourceConflictError {
   constructor(playerId: string, currency: string) {
     super(`A wallet already exists for playerId "${playerId}" and currency "${currency}"`);
     this.name = "WalletAlreadyExistsError";
   }
 }
 
-export class WalletNotFoundError extends Error {
+export class WalletNotFoundError extends ResourceNotFoundError {
   constructor(walletId: string) {
     super(`Wallet "${walletId}" was not found`);
     this.name = "WalletNotFoundError";

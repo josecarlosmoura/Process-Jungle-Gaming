@@ -1,22 +1,10 @@
-import {
-  BadRequestException,
-  Body,
-  ConflictException,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  NotFoundException,
-  Param,
-  Post,
-} from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from "@nestjs/common";
 import { z } from "zod";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { CreateWalletUseCase } from "../../application/use-cases/create-wallet.use-case";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { GetWalletUseCase } from "../../application/use-cases/get-wallet.use-case";
-import { InvalidMoneyAmountError, Money } from "../../domain/money";
-import { WalletAlreadyExistsError, WalletNotFoundError } from "../../domain/wallet";
+import { Money } from "../../domain/money";
 import type { Wallet } from "../../domain/wallet";
 
 const createWalletBodySchema = z.object({
@@ -60,20 +48,13 @@ export class WalletsController {
       throw new BadRequestException(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`));
     }
 
-    const initialBalance = this.parseMoney(parsed.data.initialBalance);
+    const initialBalance = Money.from(parsed.data.initialBalance);
 
-    try {
-      const wallet = await this.createWalletUseCase.execute({
-        playerId: parsed.data.playerId,
-        initialBalance,
-      });
-      return toResponseBody(wallet);
-    } catch (error) {
-      if (error instanceof WalletAlreadyExistsError) {
-        throw new ConflictException(error.message);
-      }
-      throw error;
-    }
+    const wallet = await this.createWalletUseCase.execute({
+      playerId: parsed.data.playerId,
+      initialBalance,
+    });
+    return toResponseBody(wallet);
   }
 
   @Get(":walletId")
@@ -83,25 +64,7 @@ export class WalletsController {
       throw new BadRequestException(`walletId: must be a valid UUID`);
     }
 
-    try {
-      const wallet = await this.getWalletUseCase.execute(walletId);
-      return toResponseBody(wallet);
-    } catch (error) {
-      if (error instanceof WalletNotFoundError) {
-        throw new NotFoundException(error.message);
-      }
-      throw error;
-    }
-  }
-
-  private parseMoney(props: { amount: string; currency: string }): Money {
-    try {
-      return Money.from(props);
-    } catch (error) {
-      if (error instanceof InvalidMoneyAmountError) {
-        throw new BadRequestException(error.message);
-      }
-      throw error;
-    }
+    const wallet = await this.getWalletUseCase.execute(walletId);
+    return toResponseBody(wallet);
   }
 }

@@ -1,4 +1,5 @@
 import { Decimal } from "decimal.js";
+import { PayloadValidationError } from "./domain-error";
 
 export interface MoneyProps {
   amount: string;
@@ -9,7 +10,7 @@ export interface MoneyFromOptions {
   allowNegative?: boolean;
 }
 
-export class InvalidMoneyAmountError extends Error {
+export class InvalidMoneyAmountError extends PayloadValidationError {
   constructor(amount: string) {
     super(`Invalid money amount: "${amount}"`);
     this.name = "InvalidMoneyAmountError";

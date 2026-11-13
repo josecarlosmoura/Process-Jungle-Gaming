@@ -1,16 +1,12 @@
-import { BadRequestException, Body, Controller, Headers, HttpException, HttpStatus, NotFoundException, Post, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Headers, HttpStatus, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { z } from "zod";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import {
-  IdempotencyConflictError,
-  LockAcquisitionTimeoutError,
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionResult,
-  UnsupportedWagerTransactionKindError,
 } from "../../application/use-cases/process-wager-transaction.use-case";
-import { InvalidMoneyAmountError, Money, type MoneyProps } from "../../domain/money";
-import { WalletNotFoundError } from "../../domain/wallet";
+import { Money, type MoneyProps } from "../../domain/money";
 
 const processWagerTransactionBodySchema = z.object({
   providerId: z.string().min(1),
@@ -56,37 +52,20 @@ export class WageringController {
       throw new BadRequestException(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`));
     }
 
-    const money = this.parseMoney(parsed.data.money);
+    const money = Money.from(parsed.data.money);
 
-    let result: ProcessWagerTransactionResult;
-    try {
-      result = await this.processWagerTransactionUseCase.execute({
-        idempotencyKey,
-        providerId: parsed.data.providerId,
-        externalTransactionId: parsed.data.externalTransactionId,
-        playerId: parsed.data.playerId,
-        walletId: parsed.data.walletId,
-        roundId: parsed.data.roundId,
-        gameId: parsed.data.gameId,
-        kind: parsed.data.kind,
-        money,
-        referenceExternalTransactionId: parsed.data.referenceExternalTransactionId,
-      });
-    } catch (error) {
-      if (error instanceof WalletNotFoundError) {
-        throw new NotFoundException(error.message);
-      }
-      if (error instanceof LockAcquisitionTimeoutError) {
-        throw new HttpException({ failureCode: "INTERNAL_ERROR" }, HttpStatus.SERVICE_UNAVAILABLE);
-      }
-      if (error instanceof IdempotencyConflictError) {
-        throw new HttpException({ failureCode: "IDEMPOTENCY_CONFLICT" }, HttpStatus.CONFLICT);
-      }
-      if (error instanceof UnsupportedWagerTransactionKindError) {
-        throw new BadRequestException(error.message);
-      }
-      throw error;
-    }
+    const result: ProcessWagerTransactionResult = await this.processWagerTransactionUseCase.execute({
+      idempotencyKey,
+      providerId: parsed.data.providerId,
+      externalTransactionId: parsed.data.externalTransactionId,
+      playerId: parsed.data.playerId,
+      walletId: parsed.data.walletId,
+      roundId: parsed.data.roundId,
+      gameId: parsed.data.gameId,
+      kind: parsed.data.kind,
+      money,
+      referenceExternalTransactionId: parsed.data.referenceExternalTransactionId,
+    });
 
     res.status(this.statusFor(result)).json(this.toResponseBody(result));
   }
@@ -106,16 +85,5 @@ export class WageringController {
       idempotentReplay: result.idempotentReplay,
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
     };
-  }
-
-  private parseMoney(props: { amount: string; currency: string }): Money {
-    try {
-      return Money.from(props);
-    } catch (error) {
-      if (error instanceof InvalidMoneyAmountError) {
-        throw new BadRequestException(error.message);
-      }
-      throw error;
-    }
   }
 }

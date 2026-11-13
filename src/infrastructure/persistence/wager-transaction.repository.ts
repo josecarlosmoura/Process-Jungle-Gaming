@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { EntityManager } from "@mikro-orm/postgresql";
 import type { WagerTransactionRepository } from "../../application/ports/wager-transaction.repository";
+import type { FailureCode } from "../../domain/failure-code";
 import { Money } from "../../domain/money";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WagerTransactionEntity } from "./wager-transaction.entity";
@@ -25,7 +26,10 @@ export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerT
     createdAt: entity.createdAt,
     status: entity.status as WagerTransactionStatus,
     referenceTransactionId: entity.referenceTransactionId ?? undefined,
-    failureCode: entity.failureCode ?? undefined,
+    // RN-53/ARCHITECTURE.md secao 9: a coluna guarda qualquer string gravada por reject()/fail(),
+    // que ja restringe o valor a FailureCode em tempo de compilacao - so o driver, que devolve
+    // "string" bruto, precisa do cast nesta borda (mesmo padrao de kind/status acima).
+    failureCode: (entity.failureCode as FailureCode | null) ?? undefined,
     processedAt: entity.processedAt ?? undefined,
     balanceAfterProcessing:
       entity.balanceAfterAmount != null && entity.balanceAfterCurrency != null

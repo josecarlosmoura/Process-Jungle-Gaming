@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
+import { PayloadValidationError, ResourceConflictError, TransientInfrastructureError } from "../../domain/domain-error";
 import { CurrencyMismatchError, type Money, type MoneyProps } from "../../domain/money";
 import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
@@ -35,23 +36,23 @@ export interface ProcessWagerTransactionResult {
   idempotentReplay: boolean;
 }
 
-export class UnsupportedWagerTransactionKindError extends Error {
+export class UnsupportedWagerTransactionKindError extends PayloadValidationError {
   constructor(public readonly kind: string) {
     super(`kind "${kind}" is not supported yet`);
     this.name = "UnsupportedWagerTransactionKindError";
   }
 }
 
-export class LockAcquisitionTimeoutError extends Error {
+export class LockAcquisitionTimeoutError extends TransientInfrastructureError {
   constructor(walletId: string) {
     super(`Lock for wallet "${walletId}" was not acquired before lock_timeout elapsed`);
     this.name = "LockAcquisitionTimeoutError";
   }
 }
 
-export class IdempotencyConflictError extends Error {
+export class IdempotencyConflictError extends ResourceConflictError {
   constructor(idempotencyKey: string) {
-    super(`Idempotency-Key "${idempotencyKey}" was already used with a different payload`);
+    super(`Idempotency-Key "${idempotencyKey}" was already used with a different payload`, "IDEMPOTENCY_CONFLICT");
     this.name = "IdempotencyConflictError";
   }
 }
