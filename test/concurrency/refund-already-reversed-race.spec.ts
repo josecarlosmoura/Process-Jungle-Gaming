@@ -182,7 +182,10 @@ describe("corrida de REFUND concorrente sobre a mesma BET", () => {
         );
         expect(rows[0]?.balance_amount).toBe("1000.00");
 
-        expect(await countWhere("wallet_ledger_entries", "wallet_id", wallet.id)).toBe(2);
+        // 3, nao 2: POST /wallets com saldo inicial positivo ja grava sua propria OPENING
+        // CREDIT (abertura da wallet) - as duas que esta corrida de fato exercita sao a DEBIT da
+        // BET e a unica CREDIT do REFUND vencedor.
+        expect(await countWhere("wallet_ledger_entries", "wallet_id", wallet.id)).toBe(3);
       } finally {
         await deleteWalletCascade(wallet.id);
       }

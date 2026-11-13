@@ -62,3 +62,6 @@ CLAUDE.md
 # Harness de testes e mocks de integração
 Testing/
 Melhorias/
+
+# Autenticação e tokens de serviços externos
+Auth/
