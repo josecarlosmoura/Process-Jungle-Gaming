@@ -130,6 +130,7 @@ describe("inbox_messages table schema (migration:up)", () => {
     expect(consumerName?.data_type).toBe("text");
     expect(messageId?.data_type).toBe("text");
     expect(payloadHash?.data_type).toBe("text");
+    expect(payloadHash?.is_nullable).toBe("NO");
   });
 
   test("the primary key is the composite (consumer_name, message_id), in that order", async () => {

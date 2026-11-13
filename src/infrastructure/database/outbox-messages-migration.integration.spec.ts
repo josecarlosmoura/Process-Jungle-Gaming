@@ -121,8 +121,17 @@ describe("outbox_messages table schema (migration:up)", () => {
 
     const id = columns.find((c) => c.column_name === "id");
     const aggregateId = columns.find((c) => c.column_name === "aggregate_id");
+    const eventType = columns.find((c) => c.column_name === "event_type");
+    const occurredAt = columns.find((c) => c.column_name === "occurred_at");
     expect(id?.data_type).toBe("uuid");
+    expect(id?.is_nullable).toBe("NO");
     expect(aggregateId?.data_type).toBe("uuid");
+    expect(aggregateId?.is_nullable).toBe("NO");
+    expect(eventType?.data_type).toBe("text");
+    expect(eventType?.is_nullable).toBe("NO");
+    expect(occurredAt?.data_type).toBe("timestamp with time zone");
+    expect(occurredAt?.is_nullable).toBe("NO");
+    expect(occurredAt?.column_default).toBeNull();
   });
 
   test("the payload column is jsonb and not nullable", async () => {
