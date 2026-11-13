@@ -9,9 +9,10 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "test": "DB_NAME=wagering_test bun test",
-    "test:unit": "DB_NAME=wagering_test bun test --path-ignore-patterns='**/*.integration.spec.ts' src",
+    "test": "DB_NAME=wagering_test bun test --isolate",
+    "test:unit": "DB_NAME=wagering_test bun test --isolate --path-ignore-patterns='**/*.integration.spec.ts' src",
     "test:integration": "DB_NAME=wagering_test bun test --isolate integration.spec",
+    "test:concurrency": "DB_NAME=wagering_test bun test --isolate test/concurrency",
     "migration:create": "MIKRO_ORM_CLI_USE_TS_NODE=true mikro-orm migration:create",
     "migration:up": "MIKRO_ORM_CLI_USE_TS_NODE=true mikro-orm migration:up",
     "migration:down": "MIKRO_ORM_CLI_USE_TS_NODE=true mikro-orm migration:down"

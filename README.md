@@ -41,10 +41,17 @@ bun run start:dev                  # sobe a API em http://localhost:3000
 ```bash
 bun run build            # typecheck (tsc)
 bun run lint             # biome lint
-bun test                 # suíte completa (unidade + integração + e2e, requer Postgres/LocalStack no ar)
+bun run test             # suíte completa (unidade + integração + e2e, requer Postgres/LocalStack no ar)
 bun run test:unit        # exclui *.integration.spec.ts
 bun run test:integration # só *.integration.spec.ts, isolado por arquivo
+bun run test:concurrency # cenário obrigatório de concorrência (test/concurrency/), paralelismo HTTP real
 ```
+
+Sempre use `bun run test`/`test:*` (nunca `bun test` direto): vários specs mutam `process.env`
+e fazem `import()` dinâmico do `AppModule` para simular dependências fora do ar (ex.: Postgres
+inacessível) — sem a flag `--isolate`, que os scripts acima já carregam, todos os arquivos rodam
+no mesmo processo e esse `process.env` vaza de um arquivo para o outro, quebrando testes que nada
+têm a ver com a mudança feita.
 
 ## Exemplo rápido
 

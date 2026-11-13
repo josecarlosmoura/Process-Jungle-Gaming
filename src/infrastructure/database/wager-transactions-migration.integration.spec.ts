@@ -5,6 +5,12 @@ import { MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../config/env.schema";
 import { buildMikroOrmOptions } from "./mikro-orm.config";
 
+// Forca wagering_test independente de como o teste e invocado - rodando via Test Explorer da
+// IDE (sem o script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// define essa env var), o .env traria "wagering_dev", e este arquivo roda migration:down --to 0
+// via execSync, que apagaria as tabelas do banco de desenvolvimento.
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
   ...buildMikroOrmOptions({
@@ -33,10 +39,14 @@ interface ConstraintInfo {
   constraint_type: string;
 }
 
-function ensureWagerTransactionsTableExists(): void {
-  // migration:up nao reaplica uma migration ja registrada em mikro_orm_migrations -
-  // chamar em todo teste garante a pre-condicao sem depender da ordem de execucao
-  // entre os describes deste arquivo (mesmo padrao de wallets-migration.integration.spec.ts, T102).
+async function ensureWagerTransactionsTableExists(): Promise<void> {
+  // Garante a pre-condicao sem depender da ordem de execucao entre os describes deste
+  // arquivo (mesmo padrao de wallets-migration.integration.spec.ts, T102), mas so paga o
+  // custo de subir um processo novo (ts-node + bun + reconexao, cold start que rotineiramente
+  // passa de 1s) quando a tabela de fato nao existe.
+  if (await tableExists("wager_transactions")) {
+    return;
+  }
   execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
 }
 
@@ -142,7 +152,7 @@ afterAll(async () => {
 
 describe("wager_transactions table schema (migration:up)", () => {
   test("migration:up creates the wager_transactions table with exactly the expected 20 columns", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
     const columnNames = columns.map((c) => c.column_name).sort();
@@ -182,7 +192,7 @@ describe("wager_transactions table schema (migration:up)", () => {
   });
 
   test("the money_amount column is numeric with precision 19 and scale 2", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
     const moneyAmount = columns.find((c) => c.column_name === "money_amount");
@@ -193,7 +203,7 @@ describe("wager_transactions table schema (migration:up)", () => {
   });
 
   test("the money_currency column is character with length 3", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
     const moneyCurrency = columns.find((c) => c.column_name === "money_currency");
@@ -203,7 +213,7 @@ describe("wager_transactions table schema (migration:up)", () => {
   });
 
   test("the status column defaults to PENDING and is not nullable", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
     const status = columns.find((c) => c.column_name === "status");
@@ -213,7 +223,7 @@ describe("wager_transactions table schema (migration:up)", () => {
   });
 
   test("the required and optional columns match the expected nullability", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const columns = await wagerTransactionsColumns();
     const nullability = new Map(columns.map((c) => [c.column_name, c.is_nullable]));
@@ -252,7 +262,7 @@ describe("wager_transactions table schema (migration:up)", () => {
   });
 
   test("the unique constraints have the expected literal names", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const names = (await wagerTransactionsConstraints()).map((c) => c.constraint_name);
 
@@ -262,28 +272,34 @@ describe("wager_transactions table schema (migration:up)", () => {
 });
 
 describe("wager_transactions table reversibility (migration:down)", () => {
-  test("migration:down drops the wager_transactions table and removes its row from mikro_orm_migrations", async () => {
-    ensureWagerTransactionsTableExists();
-    await expect(tableExists("wager_transactions")).resolves.toBe(true);
+  test(
+    "migration:down drops the wager_transactions table and removes its row from mikro_orm_migrations",
+    async () => {
+      await ensureWagerTransactionsTableExists();
+      await expect(tableExists("wager_transactions")).resolves.toBe(true);
 
-    // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir da
-    // migration do ledger de wallet, que depende de wager_transactions via FK, isso deixou de ser
-    // CreateWagerTransactions. "--to 0" reverte TODAS as migrations, independente de quantas
-    // existirem depois desta, mesmo padrao ja usado nas outras suites de migration deste diretorio.
-    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
+      // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir da
+      // migration do ledger de wallet, que depende de wager_transactions via FK, isso deixou de ser
+      // CreateWagerTransactions. "--to 0" reverte TODAS as migrations, independente de quantas
+      // existirem depois desta, mesmo padrao ja usado nas outras suites de migration deste diretorio.
+      execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
-    await expect(tableExists("wager_transactions")).resolves.toBe(false);
-    await expect(migrationRowExists("%CreateWagerTransactions%")).resolves.toBe(false);
+      await expect(tableExists("wager_transactions")).resolves.toBe(false);
+      await expect(migrationRowExists("%CreateWagerTransactions%")).resolves.toBe(false);
 
-    // restaura a tabela - outros testes deste arquivo assumem que ela existe,
-    // independentemente da ordem de execucao
-    execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
-  });
+      // restaura a tabela - outros testes deste arquivo assumem que ela existe,
+      // independentemente da ordem de execucao
+      execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
+    },
+    // duas chamadas reais de CLI (cold start de ts-node + bun + reconexao) rotineiramente
+    // passam dos 5000ms padrao - nao e travamento (ver migrations.integration.spec.ts).
+    20_000,
+  );
 });
 
 describe("wager_transactions idempotency and external reference uniqueness", () => {
   test("a second insert with the same idempotency_key violates the unique constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const firstId = randomUUID();
     const duplicateId = randomUUID();
@@ -309,7 +325,7 @@ describe("wager_transactions idempotency and external reference uniqueness", () 
   });
 
   test("a second insert with the same provider_id and external_transaction_id violates the unique constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const providerId = "provider-a";
     const externalTransactionId = randomUUID();
@@ -336,7 +352,7 @@ describe("wager_transactions idempotency and external reference uniqueness", () 
   });
 
   test("a second insert with the same external_transaction_id but a different provider_id succeeds", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const externalTransactionId = randomUUID();
     const firstId = randomUUID();
@@ -371,7 +387,7 @@ describe("wager_transactions idempotency and external reference uniqueness", () 
 
 describe("wager_transactions referential integrity and closed kind/status domains", () => {
   test("an insert with a wallet_id that does not exist violates the foreign key constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const invalidInsert = insertWagerTransaction({ id: randomUUID(), walletId: randomUUID() });
 
@@ -379,7 +395,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with a reference_transaction_id that does not exist violates the foreign key constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const id = randomUUID();
 
@@ -398,7 +414,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with kind BET succeeds", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const id = randomUUID();
 
@@ -417,7 +433,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with an invalid kind violates the check constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
 
     try {
@@ -430,7 +446,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with status PROCESSED succeeds", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const id = randomUUID();
 
@@ -449,7 +465,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with an invalid status violates the check constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
 
     try {
@@ -462,7 +478,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with a currency shorter than 3 letters violates the check constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
 
     try {
@@ -478,7 +494,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("an insert with a lowercase currency violates the check constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
 
     try {
@@ -491,7 +507,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("the provider_id and reference_external_transaction_id index exists and allows duplicate pairs", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
 
     const indexRows = await connection.execute<{ is_unique: boolean }[]>(
       `select ix.indisunique as is_unique
@@ -541,7 +557,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("deleting a wallet still referenced by a wager_transaction violates the restrict constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const transactionId = randomUUID();
 
@@ -556,7 +572,7 @@ describe("wager_transactions referential integrity and closed kind/status domain
   });
 
   test("deleting a wager_transaction still referenced by another transaction's reference_transaction_id violates the restrict constraint", async () => {
-    ensureWagerTransactionsTableExists();
+    await ensureWagerTransactionsTableExists();
     const walletId = await createWallet();
     const originalId = randomUUID();
     const referencingId = randomUUID();

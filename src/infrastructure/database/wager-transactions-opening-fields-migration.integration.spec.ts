@@ -5,6 +5,12 @@ import { MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../config/env.schema";
 import { buildMikroOrmOptions } from "./mikro-orm.config";
 
+// Forca wagering_test independente de como o teste e invocado - rodando via Test Explorer da
+// IDE (sem o script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// define essa env var), o .env traria "wagering_dev", e este arquivo roda migration:down --to 0
+// via execSync, que apagaria as tabelas do banco de desenvolvimento.
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
   ...buildMikroOrmOptions({
@@ -18,9 +24,24 @@ const orm = await MikroORM.init({
 });
 const connection = orm.em.getConnection();
 
-function ensureMigrationApplied(): void {
-  // migration:up nao reaplica uma migration ja registrada em mikro_orm_migrations - chamar em
-  // todo teste garante a pre-condicao sem depender da ordem de execucao entre os describes.
+async function tableExists(table: string): Promise<boolean> {
+  const rows = await connection.execute<{ exists: boolean }[]>(
+    "select exists(select 1 from information_schema.tables where table_schema = 'public' and table_name = ?) as exists",
+    [table],
+  );
+  return rows[0]?.exists === true;
+}
+
+async function ensureMigrationApplied(): Promise<void> {
+  // Garante a pre-condicao sem depender da ordem de execucao entre os describes, mas so
+  // paga o custo de subir um processo novo (ts-node + bun + reconexao, cold start que
+  // rotineiramente passa de 1s) quando a migration de fato ainda nao foi aplicada - checado
+  // pela nullability de "provider_id" (NOT NULL antes desta migration, nullable depois). A
+  // checagem de tableExists evita concluir "ja aplicada" por engano quando a tabela em si
+  // ainda nao existe (coluna inexistente tambem "parece" nullable pela query).
+  if ((await tableExists("wager_transactions")) && !(await columnIsNotNullable("wager_transactions", "provider_id"))) {
+    return;
+  }
   execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
 }
 
@@ -126,7 +147,7 @@ afterAll(async () => {
 
 describe("wager_transactions opening-fields nullability (migration:up)", () => {
   test("an insert with kind OPENING and all five provider fields null succeeds", async () => {
-    ensureMigrationApplied();
+    await ensureMigrationApplied();
     const walletId = await createWallet();
     const id = randomUUID();
 
@@ -145,7 +166,7 @@ describe("wager_transactions opening-fields nullability (migration:up)", () => {
   });
 
   test("an insert with a non-OPENING kind and any of the five provider fields null violates the check constraint", async () => {
-    ensureMigrationApplied();
+    await ensureMigrationApplied();
     const walletId = await createWallet();
     const overridesPerField: Array<Partial<InsertParams>> = [
       { providerId: null },
@@ -168,7 +189,7 @@ describe("wager_transactions opening-fields nullability (migration:up)", () => {
   });
 
   test("an insert with kind OPENING and any of the five provider fields non-null violates the check constraint", async () => {
-    ensureMigrationApplied();
+    await ensureMigrationApplied();
     const walletId = await createWallet();
     const overridesPerField: Array<Partial<InsertParams>> = [
       { providerId: "provider-a" },
@@ -195,7 +216,7 @@ describe("wager_transactions opening-fields nullability (migration:down reverts 
   test(
     "migration:down succeeds with an OPENING transaction and its ledger entry already persisted, and restores NOT NULL",
     async () => {
-      ensureMigrationApplied();
+      await ensureMigrationApplied();
       const walletId = await createWallet();
       const transactionId = randomUUID();
       const ledgerId = randomUUID();
@@ -203,9 +224,19 @@ describe("wager_transactions opening-fields nullability (migration:down reverts 
       await insertLedgerEntry(ledgerId, walletId, transactionId);
 
       try {
-        // reverte so esta migration (a mais recente no momento) - nao deve lancar mesmo com a
-        // OPENING/ledger acima ainda persistidos.
-        expect(() => execSync("bun run migration:down", { cwd: process.cwd(), stdio: "pipe" })).not.toThrow();
+        // "--to <nome>" mira esta migration especificamente (reverte ela e qualquer uma mais
+        // nova, mantendo as anteriores aplicadas) - nunca "migration:down" sem argumento, que
+        // desfaz so um passo: isso quebraria assim que qualquer migration nova fosse adicionada
+        // depois desta (ja aconteceu: a migration de snapshot de saldo passou a ser "o passo
+        // mais recente", fazendo o passo cego reverter ela, nao esta, e nunca apagar a linha
+        // OPENING - achado ao investigar um FK violation nao relacionado nesta mesma sessao).
+        // Nao deve lancar mesmo com a OPENING/ledger acima ainda persistidos.
+        expect(() =>
+          execSync("bun run migration:down -- --to Migration20261113090000_WagerTransactionsOpeningFieldsNullable", {
+            cwd: process.cwd(),
+            stdio: "pipe",
+          }),
+        ).not.toThrow();
 
         expect(await columnIsNotNullable("wager_transactions", "provider_id")).toBe(true);
 
@@ -215,10 +246,12 @@ describe("wager_transactions opening-fields nullability (migration:down reverts 
         );
         expect(Number(remaining[0]?.count)).toBe(0);
       } finally {
-        ensureMigrationApplied();
+        await ensureMigrationApplied();
         await deleteWallet(walletId);
       }
     },
-    15_000,
+    // duas chamadas reais de CLI (cold start de ts-node + bun + reconexao) rotineiramente
+    // passam dos 5000ms padrao - nao e travamento (ver migrations.integration.spec.ts).
+    20_000,
   );
 });

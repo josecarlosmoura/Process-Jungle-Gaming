@@ -7,6 +7,16 @@
       "command": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
       "problemMatcher": "$tsc",
       "group": "build"
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "bun run test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "detail": "Suíte completa com --isolate (necessário: alguns arquivos simulam Postgres/SQS indisponível envenenando process.env, e sem --isolate esse estado vaza via cache do @nestjs/config para outro arquivo que roda no mesmo processo)."
     }
   ]
 }

@@ -7,6 +7,11 @@ import { validateEnv } from "../config/env.schema";
 import { buildMikroOrmOptions } from "../database/mikro-orm.config";
 import { WalletMikroOrmRepository } from "./wallet.repository";
 
+// Forca wagering_test independente de como o teste e invocado (ex.: Test Explorer da IDE, que
+// nao passa pelo script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// definiria essa env var) - nunca toca o banco de desenvolvimento (.env usa wagering_dev).
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const capturedSql: string[] = [];
 const orm = await MikroORM.init({

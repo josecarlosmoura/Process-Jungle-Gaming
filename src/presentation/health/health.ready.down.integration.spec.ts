@@ -19,7 +19,10 @@ describe("GET /health/ready - postgres down", () => {
       AWS_REGION: "us-east-1",
       AWS_ACCESS_KEY_ID: "test",
       AWS_SECRET_ACCESS_KEY: "test",
-      PORT: "4312",
+      // 4317: porta exclusiva deste arquivo - 4312 colidia com wallets.e2e.spec.ts (mesmo
+      // numero hardcoded em dois arquivos diferentes), causando EADDRINUSE quando os dois
+      // corriam juntos (suite completa, ou qualquer selecao da IDE que inclua ambos).
+      PORT: "4317",
     });
 
     const { AppModule } = await import("../../app.module");
@@ -30,9 +33,9 @@ describe("GET /health/ready - postgres down", () => {
 
     const app: INestApplication = moduleRef.createNestApplication();
     await app.init();
-    await app.listen(4312);
+    await app.listen(4317);
 
-    const response = await fetch("http://127.0.0.1:4312/health/ready");
+    const response = await fetch("http://127.0.0.1:4317/health/ready");
     const body = await response.json();
 
     expect(response.status).toBe(503);

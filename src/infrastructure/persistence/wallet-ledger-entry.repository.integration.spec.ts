@@ -12,6 +12,11 @@ import { WalletMikroOrmRepository } from "./wallet.repository";
 import { WagerTransactionMikroOrmRepository } from "./wager-transaction.repository";
 import { WalletLedgerEntryMikroOrmRepository } from "./wallet-ledger-entry.repository";
 
+// Forca wagering_test independente de como o teste e invocado (ex.: Test Explorer da IDE, que
+// nao passa pelo script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// definiria essa env var) - nunca toca o banco de desenvolvimento (.env usa wagering_dev).
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const cursorSecret = env.LEDGER_CURSOR_SECRET;
 const orm = await MikroORM.init({

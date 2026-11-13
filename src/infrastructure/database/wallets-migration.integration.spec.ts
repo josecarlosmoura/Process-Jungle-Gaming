@@ -5,6 +5,12 @@ import { MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../config/env.schema";
 import { buildMikroOrmOptions } from "./mikro-orm.config";
 
+// Forca wagering_test independente de como o teste e invocado - rodando via Test Explorer da
+// IDE (sem o script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// define essa env var), o .env traria "wagering_dev", e este arquivo roda migration:down --to 0
+// via execSync, que apagaria as tabelas do banco de desenvolvimento.
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
   ...buildMikroOrmOptions({
@@ -33,11 +39,16 @@ interface ConstraintInfo {
   constraint_type: string;
 }
 
-function ensureWalletsTableExists(): void {
-  // migration:up nao reaplica uma migration ja registrada em mikro_orm_migrations -
-  // chamar em todo teste garante a pre-condicao sem depender da ordem de execucao
-  // entre os describes deste arquivo (achado do Verifier em T004: um proof isolado
-  // nao pode herdar estado deixado por outro).
+async function ensureWalletsTableExists(): Promise<void> {
+  // Garante a pre-condicao sem depender da ordem de execucao entre os describes deste
+  // arquivo (achado do Verifier em T004: um proof isolado nao pode herdar estado deixado
+  // por outro) - mas so paga o custo de subir um processo novo (ts-node + bun + reconexao
+  // no Postgres, cold start que rotineiramente passa de 1s) quando a tabela de fato nao
+  // existe; na maioria dos testes ela ja existe de um teste anterior, e a checagem via SQL
+  // (ja na conexao aberta deste arquivo) e imediata.
+  if (await tableExists("wallets")) {
+    return;
+  }
   execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
 }
 
@@ -96,7 +107,7 @@ afterAll(async () => {
 
 describe("wallets table schema (migration:up)", () => {
   test("migration:up creates the wallets table with exactly the id, player_id, currency, balance_amount, version, created_at and updated_at columns", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const columns = await walletsColumns();
     const columnNames = columns.map((c) => c.column_name).sort();
@@ -113,7 +124,7 @@ describe("wallets table schema (migration:up)", () => {
   });
 
   test("the balance_amount column is numeric with precision 19 and scale 2", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const columns = await walletsColumns();
     const balanceAmount = columns.find((c) => c.column_name === "balance_amount");
@@ -124,7 +135,7 @@ describe("wallets table schema (migration:up)", () => {
   });
 
   test("the currency column is character with length 3", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const columns = await walletsColumns();
     const currency = columns.find((c) => c.column_name === "currency");
@@ -134,7 +145,7 @@ describe("wallets table schema (migration:up)", () => {
   });
 
   test("the version column defaults to 1 and is not nullable", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const columns = await walletsColumns();
     const version = columns.find((c) => c.column_name === "version");
@@ -144,7 +155,7 @@ describe("wallets table schema (migration:up)", () => {
   });
 
   test("created_at and updated_at are not nullable", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const columns = await walletsColumns();
     const createdAt = columns.find((c) => c.column_name === "created_at");
@@ -155,7 +166,7 @@ describe("wallets table schema (migration:up)", () => {
   });
 
   test("the unique and check constraints have the expected literal names", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
 
     const names = (await walletsConstraints()).map((c) => c.constraint_name);
 
@@ -165,28 +176,34 @@ describe("wallets table schema (migration:up)", () => {
 });
 
 describe("wallets table reversibility (migration:down)", () => {
-  test("migration:down drops the wallets table and removes its row from mikro_orm_migrations", async () => {
-    ensureWalletsTableExists();
-    await expect(tableExists("wallets")).resolves.toBe(true);
+  test(
+    "migration:down drops the wallets table and removes its row from mikro_orm_migrations",
+    async () => {
+      await ensureWalletsTableExists();
+      await expect(tableExists("wallets")).resolves.toBe(true);
 
-    // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir de
-    // T104 (wager_transactions, que depende de wallets via FK) isso deixou de ser CreateWallets.
-    // "--to 0" reverte TODAS as migrations, independente de quantas existirem depois desta,
-    // mesmo padrao ja usado em migrations.integration.spec.ts (T004).
-    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
+      // "migration:down" sem argumento desfaz so um passo (a migration mais recente) - a partir de
+      // T104 (wager_transactions, que depende de wallets via FK) isso deixou de ser CreateWallets.
+      // "--to 0" reverte TODAS as migrations, independente de quantas existirem depois desta,
+      // mesmo padrao ja usado em migrations.integration.spec.ts (T004).
+      execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
-    await expect(tableExists("wallets")).resolves.toBe(false);
-    await expect(migrationRowExists("%CreateWallets%")).resolves.toBe(false);
+      await expect(tableExists("wallets")).resolves.toBe(false);
+      await expect(migrationRowExists("%CreateWallets%")).resolves.toBe(false);
 
-    // restaura a tabela - outros testes deste arquivo assumem que ela existe,
-    // independentemente da ordem de execucao
-    execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
-  });
+      // restaura a tabela - outros testes deste arquivo assumem que ela existe,
+      // independentemente da ordem de execucao
+      execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
+    },
+    // duas chamadas reais de CLI (cold start de ts-node + bun + reconexao) rotineiramente
+    // passam dos 5000ms padrao - nao e travamento (ver migrations.integration.spec.ts).
+    20_000,
+  );
 });
 
 describe("wallets table constraints enforced by Postgres", () => {
   test("a second insert with the same player_id and currency violates the unique constraint", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const playerId = randomUUID();
     const walletId = randomUUID();
     const duplicateId = randomUUID();
@@ -209,7 +226,7 @@ describe("wallets table constraints enforced by Postgres", () => {
   });
 
   test("a second insert with the same player_id but a different currency succeeds", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const playerId = randomUUID();
     const firstId = randomUUID();
     const secondId = randomUUID();
@@ -230,7 +247,7 @@ describe("wallets table constraints enforced by Postgres", () => {
   });
 
   test("an insert with a negative balance_amount violates the check constraint", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const walletId = randomUUID();
 
     const invalidInsert = insertWallet({
@@ -244,7 +261,7 @@ describe("wallets table constraints enforced by Postgres", () => {
   });
 
   test("an insert with balance_amount zero succeeds", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const walletId = randomUUID();
 
     try {
@@ -261,7 +278,7 @@ describe("wallets table constraints enforced by Postgres", () => {
   });
 
   test("an insert with a currency shorter than 3 letters violates the check constraint", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const walletId = randomUUID();
 
     // char(3) por si so faz padding com espaco em branco em vez de rejeitar um valor mais
@@ -279,7 +296,7 @@ describe("wallets table constraints enforced by Postgres", () => {
   });
 
   test("an insert with a lowercase currency violates the check constraint", async () => {
-    ensureWalletsTableExists();
+    await ensureWalletsTableExists();
     const walletId = randomUUID();
 
     const lowercaseCurrencyInsert = insertWallet({

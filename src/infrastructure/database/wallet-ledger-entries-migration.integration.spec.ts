@@ -5,6 +5,12 @@ import { MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../config/env.schema";
 import { buildMikroOrmOptions } from "./mikro-orm.config";
 
+// Forca wagering_test independente de como o teste e invocado - rodando via Test Explorer da
+// IDE (sem o script "test" do package.json, cujo "DB_NAME=wagering_test bun test" normalmente
+// define essa env var), o .env traria "wagering_dev", e este arquivo roda migration:down --to 0
+// via execSync, que apagaria as tabelas do banco de desenvolvimento.
+Object.assign(process.env, { DB_NAME: "wagering_test" });
+
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
   ...buildMikroOrmOptions({
@@ -33,10 +39,14 @@ interface ConstraintInfo {
   constraint_type: string;
 }
 
-function ensureWalletLedgerEntriesTableExists(): void {
-  // migration:up nao reaplica uma migration ja registrada em mikro_orm_migrations -
-  // chamar em todo teste garante a pre-condicao sem depender da ordem de execucao
-  // entre os describes deste arquivo (mesmo padrao de wager-transactions-migration.integration.spec.ts).
+async function ensureWalletLedgerEntriesTableExists(): Promise<void> {
+  // Garante a pre-condicao sem depender da ordem de execucao entre os describes deste
+  // arquivo (mesmo padrao de wager-transactions-migration.integration.spec.ts), mas so
+  // paga o custo de subir um processo novo (ts-node + bun + reconexao, cold start que
+  // rotineiramente passa de 1s) quando a tabela de fato nao existe.
+  if (await tableExists("wallet_ledger_entries")) {
+    return;
+  }
   execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
 }
 
@@ -141,7 +151,7 @@ afterAll(async () => {
 
 describe("wallet_ledger_entries table schema (migration:up)", () => {
   test("migration:up creates the wallet_ledger_entries table with exactly the expected 9 columns", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
 
     const columns = await walletLedgerEntriesColumns();
     const columnNames = columns.map((c) => c.column_name).sort();
@@ -171,7 +181,7 @@ describe("wallet_ledger_entries table schema (migration:up)", () => {
   });
 
   test("the money_amount, balance_before_amount and balance_after_amount columns are numeric with precision 19 and scale 2", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
 
     const columns = await walletLedgerEntriesColumns();
 
@@ -184,7 +194,7 @@ describe("wallet_ledger_entries table schema (migration:up)", () => {
   });
 
   test("the money_currency column is character with length 3", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
 
     const columns = await walletLedgerEntriesColumns();
     const moneyCurrency = columns.find((c) => c.column_name === "money_currency");
@@ -194,7 +204,7 @@ describe("wallet_ledger_entries table schema (migration:up)", () => {
   });
 
   test("all columns of wallet_ledger_entries are not nullable", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
 
     const columns = await walletLedgerEntriesColumns();
     const nullability = new Map(columns.map((c) => [c.column_name, c.is_nullable]));
@@ -217,7 +227,7 @@ describe("wallet_ledger_entries table schema (migration:up)", () => {
   });
 
   test("the unique constraint on wallet_id and transaction_id has the expected literal name", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
 
     const names = (await walletLedgerEntriesConstraints()).map((c) => c.constraint_name);
 
@@ -226,26 +236,32 @@ describe("wallet_ledger_entries table schema (migration:up)", () => {
 });
 
 describe("wallet_ledger_entries table reversibility (migration:down)", () => {
-  test("migration:down drops the wallet_ledger_entries table and removes its row from mikro_orm_migrations", async () => {
-    ensureWalletLedgerEntriesTableExists();
-    await expect(tableExists("wallet_ledger_entries")).resolves.toBe(true);
+  test(
+    "migration:down drops the wallet_ledger_entries table and removes its row from mikro_orm_migrations",
+    async () => {
+      await ensureWalletLedgerEntriesTableExists();
+      await expect(tableExists("wallet_ledger_entries")).resolves.toBe(true);
 
-    // "--to 0" reverte TODAS as migrations, independente de quantas existirem depois desta no
-    // futuro - mesmo padrao ja usado nas outras suites de migration deste diretorio.
-    execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
+      // "--to 0" reverte TODAS as migrations, independente de quantas existirem depois desta no
+      // futuro - mesmo padrao ja usado nas outras suites de migration deste diretorio.
+      execSync("bun run migration:down -- --to 0", { cwd: process.cwd(), stdio: "pipe" });
 
-    await expect(tableExists("wallet_ledger_entries")).resolves.toBe(false);
-    await expect(migrationRowExists("%CreateWalletLedgerEntries%")).resolves.toBe(false);
+      await expect(tableExists("wallet_ledger_entries")).resolves.toBe(false);
+      await expect(migrationRowExists("%CreateWalletLedgerEntries%")).resolves.toBe(false);
 
-    // restaura a tabela - outros testes deste arquivo assumem que ela existe,
-    // independentemente da ordem de execucao
-    execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
-  });
+      // restaura a tabela - outros testes deste arquivo assumem que ela existe,
+      // independentemente da ordem de execucao
+      execSync("bun run migration:up", { cwd: process.cwd(), stdio: "pipe" });
+    },
+    // duas chamadas reais de CLI (cold start de ts-node + bun + reconexao) rotineiramente
+    // passam dos 5000ms padrao - nao e travamento (ver migrations.integration.spec.ts).
+    20_000,
+  );
 });
 
 describe("wallet_ledger_entries uniqueness per (wallet_id, transaction_id)", () => {
   test("a second insert with the same wallet_id and transaction_id violates the unique constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const firstId = randomUUID();
@@ -266,7 +282,7 @@ describe("wallet_ledger_entries uniqueness per (wallet_id, transaction_id)", () 
   });
 
   test("a second insert with the same wallet_id but a different transaction_id succeeds", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const firstTransactionId = await createWagerTransaction(walletId);
     const secondTransactionId = await createWagerTransaction(walletId);
@@ -292,7 +308,7 @@ describe("wallet_ledger_entries uniqueness per (wallet_id, transaction_id)", () 
   });
 
   test("a second insert with a different wallet_id but the same transaction_id succeeds", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const firstWalletId = await createWallet();
     const secondWalletId = await createWallet();
     const transactionId = await createWagerTransaction(firstWalletId);
@@ -320,7 +336,7 @@ describe("wallet_ledger_entries uniqueness per (wallet_id, transaction_id)", () 
 
 describe("wallet_ledger_entries referential integrity, closed direction domain and balance arithmetic", () => {
   test("an insert with a wallet_id that does not exist violates the foreign key constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -335,7 +351,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with a transaction_id that does not exist violates the foreign key constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
 
     try {
@@ -348,7 +364,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with direction DEBIT succeeds", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const id = randomUUID();
@@ -369,7 +385,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with an invalid direction violates the check constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -384,7 +400,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with direction DEBIT and correct balance arithmetic succeeds", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const id = randomUUID();
@@ -413,7 +429,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with direction DEBIT and incorrect balance arithmetic violates the check constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -436,7 +452,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with direction CREDIT and correct balance arithmetic succeeds", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const id = randomUUID();
@@ -465,7 +481,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with direction CREDIT and incorrect balance arithmetic violates the check constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -488,7 +504,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with a currency shorter than 3 letters violates the check constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -506,7 +522,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("an insert with a lowercase currency violates the check constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
 
@@ -521,7 +537,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("deleting a wallet still referenced by a wallet_ledger_entry violates the restrict constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const entryId = randomUUID();
@@ -538,7 +554,7 @@ describe("wallet_ledger_entries referential integrity, closed direction domain a
   });
 
   test("deleting a wager_transaction still referenced by a wallet_ledger_entry violates the restrict constraint", async () => {
-    ensureWalletLedgerEntriesTableExists();
+    await ensureWalletLedgerEntriesTableExists();
     const walletId = await createWallet();
     const transactionId = await createWagerTransaction(walletId);
     const entryId = randomUUID();
