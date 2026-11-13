@@ -11,6 +11,7 @@ import { WALLET_REPOSITORY_INTERFACE } from "../../application/ports/wallet.repo
 import { WAGER_TRANSACTION_REPOSITORY_INTERFACE } from "../../application/ports/wager-transaction.repository";
 import { WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE } from "../../application/ports/wallet-ledger-entry.repository";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
+import { ReferenceResolver } from "../../application/reference-resolver";
 import { WageringController } from "./wagering.controller";
 
 @Module({
@@ -25,6 +26,7 @@ import { WageringController } from "./wagering.controller";
         new WalletLedgerEntryMikroOrmRepository(em, config.ledgerCursorSecret),
       inject: [EntityManager, AppConfigService],
     },
+    ReferenceResolver,
     ProcessWagerTransactionUseCase,
   ],
 })

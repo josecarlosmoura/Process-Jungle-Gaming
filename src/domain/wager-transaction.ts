@@ -3,6 +3,8 @@ import type { Money } from "./money";
 
 export type WagerTransactionKind = "OPENING" | "BET" | "WIN" | "LOSS" | "REFUND" | "ROLLBACK";
 
+export type ReversalKind = "REFUND" | "ROLLBACK";
+
 export type WagerTransactionStatus = "PENDING" | "PENDING_REFERENCE" | "PROCESSED" | "REJECTED" | "FAILED";
 
 export type LedgerDirection = "DEBIT" | "CREDIT";
@@ -248,7 +250,7 @@ export class WagerTransaction {
         if (!reference) {
           throw new LedgerDirectionNotApplicableError(this.id, this.kind);
         }
-        // RN-26: ROLLBACK aplica o efeito inverso ao da transação original.
+        // ROLLBACK aplica o efeito inverso ao da transação original.
         return reference.ledgerDirectionFor() === "DEBIT" ? "CREDIT" : "DEBIT";
       case "LOSS":
         throw new LedgerDirectionNotApplicableError(this.id, this.kind);

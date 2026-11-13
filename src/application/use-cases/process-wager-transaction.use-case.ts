@@ -7,6 +7,8 @@ import { CurrencyMismatchError, type Money, type MoneyProps } from "../../domain
 import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
+// biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
+import { ReferenceResolver } from "../reference-resolver";
 import type { WalletRepository } from "../ports/wallet.repository";
 import { WALLET_REPOSITORY_INTERFACE } from "../ports/wallet.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
@@ -73,12 +75,12 @@ export class ProcessWagerTransactionUseCase {
     private readonly wagerTransactionRepository: WagerTransactionRepository,
     @Inject(WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE)
     private readonly walletLedgerEntryRepository: WalletLedgerEntryRepository,
+    private readonly referenceResolver: ReferenceResolver,
   ) {}
 
   async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
-    // Restricao temporaria desta tarefa (T204/T205 removem conforme REFUND/ROLLBACK ganham
-    // suporte) - mora aqui, nao no controller, para nao espalhar logica de negocio sobre kind
-    // pela camada de apresentacao.
+    // Restricao temporaria, ate REFUND/ROLLBACK ganharem suporte - mora aqui, nao no controller,
+    // para nao espalhar logica de negocio sobre kind pela camada de apresentacao.
     if (!SUPPORTED_KINDS.has(command.kind)) {
       throw new UnsupportedWagerTransactionKindError(command.kind);
     }
@@ -151,9 +153,9 @@ export class ProcessWagerTransactionUseCase {
     return this.processWithBalanceEffect(transaction, wallet, command);
   }
 
-  // RN-24/AD-005: LOSS nunca chama wallet.credit/debit, entao a consistencia de moeda (garantida
-  // de graca para BET/WIN pelo proprio debit/credit) precisa de uma checagem explicita aqui -
-  // via Wallet.hasCurrency, a mesma fonte que debit/credit usam internamente.
+  // LOSS nunca chama wallet.credit/debit, entao a consistencia de moeda (garantida de graca para
+  // BET/WIN pelo proprio debit/credit) precisa de uma checagem explicita aqui - via
+  // Wallet.hasCurrency, a mesma fonte que debit/credit usam internamente.
   private async processWithoutBalanceEffect(
     transaction: WagerTransaction,
     wallet: Wallet,
@@ -191,11 +193,19 @@ export class ProcessWagerTransactionUseCase {
   ): Promise<ProcessWagerTransactionResult> {
     let referenceTransactionId: string | undefined;
     if (transaction.kind === "WIN" && command.referenceExternalTransactionId) {
-      const reference = await this.wagerTransactionRepository.findByProviderAndExternalId(
-        command.providerId,
-        command.referenceExternalTransactionId,
-      );
-      if (!this.isValidWinReference(reference, command)) {
+      const resolution = await this.referenceResolver.resolve({
+        providerId: command.providerId,
+        referenceExternalTransactionId: command.referenceExternalTransactionId,
+        playerId: command.playerId,
+        walletId: command.walletId,
+        roundId: command.roundId,
+        money: command.money,
+      });
+      // A referencia opcional de WIN so aceita uma BET - qualquer outro outcome do resolver
+      // (incluindo RESOLVED para um kind diferente de BET) rejeita por completo, nunca processa
+      // ignorando a referencia em silencio. Essa checagem de "kind aceitavel" e responsabilidade
+      // de quem chama, nao do ReferenceResolver (REFUND/ROLLBACK aceitam outros kinds).
+      if (resolution.outcome !== "RESOLVED" || resolution.reference.kind !== "BET") {
         transaction.reject("REFERENCE_MISMATCH");
         await this.wagerTransactionRepository.save(transaction);
         return {
@@ -206,7 +216,7 @@ export class ProcessWagerTransactionUseCase {
           idempotentReplay: false,
         };
       }
-      referenceTransactionId = reference?.id;
+      referenceTransactionId = resolution.reference.id;
     }
 
     const balanceBefore = wallet.balance;
@@ -259,23 +269,6 @@ export class ProcessWagerTransactionUseCase {
     };
   }
 
-  // AD-004: referencia opcional de WIN - precisa ser uma BET PROCESSED do mesmo agrupamento;
-  // qualquer divergencia (incluindo "nao encontrada") e invalida, nunca ignorada em silencio.
-  private isValidWinReference(reference: WagerTransaction | null, command: ProcessWagerTransactionCommand): boolean {
-    if (!reference) {
-      return false;
-    }
-    return (
-      reference.kind === "BET" &&
-      reference.status === "PROCESSED" &&
-      reference.providerId === command.providerId &&
-      reference.playerId === command.playerId &&
-      reference.walletId === command.walletId &&
-      reference.roundId === command.roundId &&
-      reference.money.currency === command.money.currency
-    );
-  }
-
   // A mesma Idempotency-Key com o mesmo payloadHash e replay (devolve o resultado original, sem
   // reaplicar nada); com payloadHash diferente e conflito, nunca replay - mesmo quando a
   // transacao existente ja terminou REJECTED/FAILED, que so e replay para uma repeticao exata do
@@ -298,8 +291,8 @@ export class ProcessWagerTransactionUseCase {
           idempotentReplay: true,
         };
       }
-      // LOSS PROCESSED nunca gera ledger entry (RN-24) - o saldo observado naquele momento vem
-      // do snapshot gravado por markProcessed(), nunca do saldo atual da wallet (que pode ja ter
+      // LOSS PROCESSED nunca gera ledger entry - o saldo observado naquele momento vem do
+      // snapshot gravado por markProcessed(), nunca do saldo atual da wallet (que pode ja ter
       // sido alterado por outra transacao entre o processamento original e este replay).
       return {
         transactionId: transaction.id,

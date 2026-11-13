@@ -134,3 +134,55 @@ describe("WagerTransactionMikroOrmRepository - round-trip", () => {
     }
   });
 });
+
+describe("WagerTransactionMikroOrmRepository - findReversalOf", () => {
+  test("finds a PROCESSED reversal of the given kind pointing at the reference, and is kind-specific", async () => {
+    const walletId = await seedWallet();
+    const referenceId = randomUUID();
+    const refundId = randomUUID();
+    try {
+      const reference = WagerTransaction.create({
+        id: referenceId,
+        providerId: "provider-z",
+        externalTransactionId: randomUUID(),
+        idempotencyKey: `provider-z:${randomUUID()}`,
+        payloadHash: "c".repeat(64),
+        walletId,
+        playerId: randomUUID(),
+        roundId: randomUUID(),
+        gameId: "slot-3",
+        kind: "BET",
+        money: Money.from({ amount: "10.00", currency: "BRL" }),
+      });
+      reference.markProcessed(undefined, new Date());
+      await makeRepo().save(reference);
+
+      const refund = WagerTransaction.create({
+        id: refundId,
+        providerId: "provider-z",
+        externalTransactionId: randomUUID(),
+        idempotencyKey: `provider-z:${randomUUID()}`,
+        payloadHash: "d".repeat(64),
+        walletId,
+        playerId: reference.playerId,
+        roundId: reference.roundId,
+        gameId: "slot-3",
+        kind: "REFUND",
+        money: Money.from({ amount: "10.00", currency: "BRL" }),
+        referenceExternalTransactionId: reference.externalTransactionId,
+      });
+      refund.markProcessed(referenceId, new Date());
+      await makeRepo().save(refund);
+
+      const foundRefund = await makeRepo().findReversalOf(referenceId, "REFUND");
+      expect(foundRefund?.id).toBe(refundId);
+
+      const foundRollback = await makeRepo().findReversalOf(referenceId, "ROLLBACK");
+      expect(foundRollback).toBeNull();
+    } finally {
+      await deleteTransaction(refundId);
+      await deleteTransaction(referenceId);
+      await deleteWallet(walletId);
+    }
+  });
+});

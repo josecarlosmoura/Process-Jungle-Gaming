@@ -4,7 +4,12 @@ import { EntityManager } from "@mikro-orm/postgresql";
 import type { WagerTransactionRepository } from "../../application/ports/wager-transaction.repository";
 import type { FailureCode } from "../../domain/failure-code";
 import { Money } from "../../domain/money";
-import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
+import {
+  WagerTransaction,
+  type ReversalKind,
+  type WagerTransactionKind,
+  type WagerTransactionStatus,
+} from "../../domain/wager-transaction";
 import { WagerTransactionEntity } from "./wager-transaction.entity";
 
 export function wagerTransactionToDomain(entity: WagerTransactionEntity): WagerTransaction {
@@ -95,6 +100,14 @@ export class WagerTransactionMikroOrmRepository implements WagerTransactionRepos
     const entity = await this.em.findOne(WagerTransactionEntity, {
       providerId,
       externalTransactionId: externalId,
+    });
+    return entity ? wagerTransactionToDomain(entity) : null;
+  }
+
+  async findReversalOf(referenceTransactionId: string, reversalKind: ReversalKind): Promise<WagerTransaction | null> {
+    const entity = await this.em.findOne(WagerTransactionEntity, {
+      referenceTransactionId,
+      kind: reversalKind,
     });
     return entity ? wagerTransactionToDomain(entity) : null;
   }

@@ -42,6 +42,15 @@ describe("Money", () => {
     expect(negativeZero.equals(Money.zero("BRL"))).toBe(true);
   });
 
+  test("hasSameCurrency compares only the currency, regardless of amount", () => {
+    const tenBrl = Money.from({ amount: "10.00", currency: "BRL" });
+    const twentyFiveBrl = Money.from({ amount: "25.00", currency: "BRL" });
+    const tenUsd = Money.from({ amount: "10.00", currency: "USD" });
+
+    expect(tenBrl.hasSameCurrency(twentyFiveBrl)).toBe(true);
+    expect(tenBrl.hasSameCurrency(tenUsd)).toBe(false);
+  });
+
   test("add, subtract and negate each return a new instance, leaving the original unchanged", () => {
     const original = Money.from({ amount: "25.00", currency: "BRL" });
     const ten = Money.from({ amount: "10.00", currency: "BRL" });

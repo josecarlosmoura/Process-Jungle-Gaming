@@ -88,6 +88,10 @@ export class Money {
     return this.currency === other.currency && this.value.equals(other.value);
   }
 
+  hasSameCurrency(other: Money): boolean {
+    return this.currency === other.currency;
+  }
+
   toJSON(): MoneyProps {
     return { amount: this.value.toFixed(2), currency: this.currency };
   }
