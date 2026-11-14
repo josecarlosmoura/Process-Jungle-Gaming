@@ -25,7 +25,14 @@ import { WagerTransactionSqsConsumer } from "./wager-transaction-sqs.consumer";
         sqsClient: SQSClient,
         useCase: ConsumeWagerTransactionMessageUseCase,
         config: AppConfigService,
-      ) => new WagerTransactionSqsConsumer(orm, sqsClient, useCase, config.sqsConsumerWaitTimeSeconds),
+      ) =>
+        new WagerTransactionSqsConsumer(
+          orm,
+          sqsClient,
+          useCase,
+          config.sqsConsumerWaitTimeSeconds,
+          config.wagerTransactionsQueueName,
+        ),
       inject: [MikroORM, SQSClient, ConsumeWagerTransactionMessageUseCase, AppConfigService],
     },
   ],

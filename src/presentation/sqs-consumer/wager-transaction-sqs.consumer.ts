@@ -9,7 +9,7 @@ import { SQSClient } from "@aws-sdk/client-sqs";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ConsumeWagerTransactionMessageUseCase } from "../../application/use-cases/consume-wager-transaction-message.use-case";
 import { isTransientInfrastructureFailure } from "../../domain/domain-error";
-import { WAGER_TRANSACTIONS_CONSUMER_NAME, WAGER_TRANSACTIONS_QUEUE_NAME } from "../../infrastructure/messaging/queue-names";
+import { WAGER_TRANSACTIONS_CONSUMER_NAME } from "../../infrastructure/messaging/queue-names";
 import { parseWagerTransactionRequestedEnvelope, toProcessWagerTransactionCommand } from "./wager-transaction-requested-envelope";
 
 // Pausa curta entre tentativas de ReceiveMessageCommand quando a propria chamada falha (ex.:
@@ -39,6 +39,10 @@ export class WagerTransactionSqsConsumer implements OnApplicationBootstrap, OnMo
     private readonly sqsClient: SQSClient,
     private readonly consumeWagerTransactionMessageUseCase: ConsumeWagerTransactionMessageUseCase,
     private readonly waitTimeSeconds: number,
+    // Configuravel (default "wager-transactions.fifo", AppConfigService.wagerTransactionsQueueName)
+    // so para permitir que um teste de integracao isole o consumer numa fila FIFO descartavel
+    // propria, sem competir com nenhuma instancia real da app rodando ao lado pela mesma fila.
+    private readonly queueName: string,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -174,10 +178,10 @@ export class WagerTransactionSqsConsumer implements OnApplicationBootstrap, OnMo
   private resolveQueueUrl(): Promise<string> {
     if (!this.queueUrlPromise) {
       this.queueUrlPromise = this.sqsClient
-        .send(new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }))
+        .send(new GetQueueUrlCommand({ QueueName: this.queueName }))
         .then((result) => {
           if (!result.QueueUrl) {
-            throw new Error(`SQS did not return a QueueUrl for "${WAGER_TRANSACTIONS_QUEUE_NAME}"`);
+            throw new Error(`SQS did not return a QueueUrl for "${this.queueName}"`);
           }
           return result.QueueUrl;
         })

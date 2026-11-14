@@ -66,4 +66,8 @@ export class AppConfigService {
   get sqsConsumerWaitTimeSeconds(): number {
     return this.configService.get("SQS_CONSUMER_WAIT_TIME_SECONDS", { infer: true });
   }
+
+  get wagerTransactionsQueueName(): string {
+    return this.configService.get("WAGER_TRANSACTIONS_QUEUE_NAME", { infer: true });
+  }
 }

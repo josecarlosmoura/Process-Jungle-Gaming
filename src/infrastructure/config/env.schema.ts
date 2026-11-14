@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WAGER_TRANSACTIONS_QUEUE_NAME } from "../messaging/queue-names";
 
 // z.string().url() delega ao parser WHATWG URL, que aceita "localhost:4566" como uma URL
 // valida de esquema "localhost:" - sem isto, um LOCALSTACK_ENDPOINT sem "http://" passaria
@@ -32,6 +33,10 @@ export const envSchema = z.object({
   // Maximo do proprio SQS e 20 (ReceiveMessageCommand.WaitTimeSeconds) - long polling de
   // verdade, mas baixo o bastante para um SIGTERM em teste manual nao ficar preso por ate 20s.
   SQS_CONSUMER_WAIT_TIME_SECONDS: z.coerce.number().int().min(0).max(20).default(10),
+  // So existe para permitir que um teste de integracao aponte WagerTransactionSqsConsumer para
+  // uma fila FIFO descartavel propria, isolada de qualquer instancia real da app rodando ao lado
+  // (que sempre consome "wager-transactions.fifo" por padrao) - nunca usado em producao.
+  WAGER_TRANSACTIONS_QUEUE_NAME: z.string().min(1).default(WAGER_TRANSACTIONS_QUEUE_NAME),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

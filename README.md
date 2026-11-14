@@ -72,7 +72,7 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
 ```bash
 cp .env.example .env               # ajuste se necessário; valores default já funcionam localmente
 bun install
-docker compose up -d               # Postgres + LocalStack (filas SQS)
+docker compose up -d               # Postgres + LocalStack (filas SQS) + SQS Admin (UI em http://localhost:3999)
 bun run migration:up
 bun run start:dev                  # sobe a API em http://localhost:3000
 ```

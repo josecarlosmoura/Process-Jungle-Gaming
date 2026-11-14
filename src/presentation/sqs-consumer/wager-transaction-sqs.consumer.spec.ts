@@ -87,7 +87,7 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0);
+    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
 
     try {
       consumer.onApplicationBootstrap();
@@ -111,7 +111,7 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0);
+    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
 
     try {
       consumer.onApplicationBootstrap();
@@ -140,7 +140,7 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0);
+    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
 
     consumer.onApplicationBootstrap();
     await wait(30);

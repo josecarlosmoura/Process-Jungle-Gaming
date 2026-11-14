@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { GetQueueUrlCommand, PurgeQueueCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { CreateQueueCommand, DeleteQueueCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { Test } from "@nestjs/testing";
+
+// Fila FIFO descartavel, nome aleatorio - nunca "wager-transactions.fifo" (a fila real). Isola
+// este teste de qualquer instancia real da app rodando ao lado (ex.: `bun run start:dev`), que
+// sempre consome a fila real por padrao e roubaria a mensagem antes deste teste conseguir -
+// confirmado ao vivo: sem isso, o teste falha de forma instavel sempre que a app estiver no ar
+// localmente (ver lição registrada em memória).
+const EPHEMERAL_QUEUE_NAME = `wager-transactions-test-${randomUUID()}.fifo`;
 
 // Mesmo padrão de publish-outbox.use-case.integration.spec.ts - env setado antes do import
 // dinâmico do módulo, nunca depois de um import estático no topo do arquivo.
@@ -20,11 +27,11 @@ Object.assign(process.env, {
   // Curto de proposito - este teste espera por ausencia de efeito, nao quer esperar o default de
   // producao (10s) por ciclo de polling.
   SQS_CONSUMER_WAIT_TIME_SECONDS: "1",
+  WAGER_TRANSACTIONS_QUEUE_NAME: EPHEMERAL_QUEUE_NAME,
 });
 
 const { SqsConsumerModule } = await import("./sqs-consumer.module");
 const { WagerTransactionSqsConsumer } = await import("./wager-transaction-sqs.consumer");
-const { WAGER_TRANSACTIONS_QUEUE_NAME } = await import("../../infrastructure/messaging/queue-names");
 const { validateEnv } = await import("../../infrastructure/config/env.schema");
 const { buildMikroOrmOptions } = await import("../../infrastructure/database/mikro-orm.config");
 
@@ -47,20 +54,13 @@ const sqsClient = new SQSClient({
   credentials: { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY },
 });
 
-function runSetupScript(): void {
-  const result = Bun.spawnSync(["bash", "scripts/setup-queues.sh"], {
-    cwd: process.cwd(),
-    env: { ...process.env, SQS_ENDPOINT_URL: env.LOCALSTACK_ENDPOINT, AWS_REGION: env.AWS_REGION },
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`setup-queues.sh exited with code ${result.exitCode}: ${result.stderr.toString()}`);
-  }
-}
-runSetupScript();
-const queueUrlResult = await sqsClient.send(new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }));
-const queueUrl = queueUrlResult.QueueUrl as string;
+const createdQueue = await sqsClient.send(
+  new CreateQueueCommand({ QueueName: EPHEMERAL_QUEUE_NAME, Attributes: { FifoQueue: "true" } }),
+);
+const queueUrl = createdQueue.QueueUrl as string;
 
 afterAll(async () => {
+  await sqsClient.send(new DeleteQueueCommand({ QueueUrl: queueUrl })).catch(() => {});
   await orm.close();
 });
 
@@ -124,12 +124,6 @@ function wagerTransactionRequestedBody(messageId: string, walletId: string): str
 }
 
 describe("WagerTransactionSqsConsumer - integração (Postgres + LocalStack reais)", () => {
-  beforeEach(async () => {
-    // Outros specs tambem publicam/consomem esta fila compartilhada dentro da suite completa -
-    // mesmo principio ja registrado em publish-outbox.use-case.integration.spec.ts.
-    await sqsClient.send(new PurgeQueueCommand({ QueueUrl: queueUrl })).catch(() => {});
-  });
-
   test(
     "resending the same envelope messageId as a new SQS send does not debit the wallet twice",
     async () => {
