@@ -30,6 +30,7 @@ const { WagerTransaction } = await import("../../domain/wager-transaction");
 const { WalletLedgerEntry } = await import("../../domain/wallet-ledger-entry");
 const { WagerTransactionMikroOrmRepository } = await import("../../infrastructure/persistence/wager-transaction.repository");
 const { WalletLedgerEntryMikroOrmRepository } = await import("../../infrastructure/persistence/wallet-ledger-entry.repository");
+const { encodeLedgerCursor } = await import("../../application/ports/wallet-ledger-entry.repository");
 
 const PORT = 4312;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -517,8 +518,23 @@ describe("GET /wallets/:walletId/ledger", () => {
   test("returns 400 for a malformed or tampered cursor", async () => {
     const walletId = await createEmptyWallet();
     try {
-      const { status } = await getLedger(walletId, { cursor: "not-a-valid-cursor" });
-      expect(status).toBe(400);
+      const malformed = await getLedger(walletId, { cursor: "not-a-valid-cursor" });
+      expect(malformed.status).toBe(400);
+
+      // Cursor bem-formado (payload.assinatura), mas com a assinatura adulterada - exercita o
+      // branch de verificacao HMAC de decodeLedgerCursor, nunca alcancado pelo cursor malformado
+      // acima (que falha antes, só por nao ter o separador "."). Mesma tecnica de
+      // wallet-ledger-entry.repository.integration.spec.ts (XOR no primeiro byte decodificado, nao
+      // no ultimo caractere da string, que pode decodificar para o mesmo byte por causa do padding
+      // do base64url).
+      const validCursor = encodeLedgerCursor({ createdAt: new Date(), id: randomUUID() }, "dev-only-ledger-cursor-secret-not-for-production");
+      const [payload, signature] = validCursor.split(".") as [string, string];
+      const tamperedSignatureBytes = Buffer.from(signature, "base64url");
+      tamperedSignatureBytes[0] = tamperedSignatureBytes[0] ^ 0xff;
+      const tamperedCursor = `${payload}.${tamperedSignatureBytes.toString("base64url")}`;
+
+      const tampered = await getLedger(walletId, { cursor: tamperedCursor });
+      expect(tampered.status).toBe(400);
     } finally {
       await deleteWalletCascade(walletId);
     }
