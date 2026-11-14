@@ -97,6 +97,11 @@ export function wagerTransactionToEntityData(transaction: WagerTransaction): Req
 export class WagerTransactionMikroOrmRepository implements WagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}
 
+  async findById(id: string): Promise<WagerTransaction | null> {
+    const entity = await this.em.findOne(WagerTransactionEntity, { id });
+    return entity ? wagerTransactionToDomain(entity) : null;
+  }
+
   async findByIdempotencyKey(key: string): Promise<WagerTransaction | null> {
     const entity = await this.em.findOne(WagerTransactionEntity, { idempotencyKey: key });
     return entity ? wagerTransactionToDomain(entity) : null;

@@ -204,6 +204,21 @@ async function postBet(
   return { status: response.status, body: (await response.json()) as ResponseBody };
 }
 
+interface GetResponseBody {
+  status?: string;
+  kind?: string;
+  money?: MoneyBody;
+  referenceTransactionId?: string;
+  failureCode?: string;
+  processedAt?: string;
+  message?: unknown;
+}
+
+async function getWagerTransaction(transactionId: string): Promise<{ status: number; body: GetResponseBody }> {
+  const response = await fetch(`${baseUrl}/wagering/transactions/${transactionId}`);
+  return { status: response.status, body: (await response.json()) as GetResponseBody };
+}
+
 describe("POST /wagering/transactions - header Idempotency-Key ausente", () => {
   test("POST /wagering/transactions without the Idempotency-Key header returns 400 and persists no WagerTransaction", async () => {
     const walletId = await insertWallet("1000.00");
@@ -2305,6 +2320,140 @@ describe("POST /wagering/transactions - outbox: replay nunca duplica um evento",
 
       const types = await outboxEventTypesForTransaction(first.body.transactionId as string);
       expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("GET /wagering/transactions/:transactionId", () => {
+  test("returns 200 with status kind money and processedAt for a PROCESSED BET, with no referenceTransactionId", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const bet = await postBet(betPayload(walletId, { money: { amount: "25.00", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(bet.status).toBe(201);
+
+      const { status, body } = await getWagerTransaction(bet.body.transactionId as string);
+
+      expect(status).toBe(200);
+      expect(body.status).toBe("PROCESSED");
+      expect(body.kind).toBe("BET");
+      expect(body.money).toEqual({ amount: "25.00", currency: "BRL" });
+      expect(typeof body.processedAt).toBe("string");
+      expect(body.referenceTransactionId).toBeUndefined();
+      expect(body.failureCode).toBeUndefined();
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 200 with referenceTransactionId for a PROCESSED REFUND that referenced a BET", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      const bet = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: betExternalId, money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const refund = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "REFUND",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(refund.status).toBe(201);
+      expect(refund.body.status).toBe("PROCESSED");
+
+      const { status, body } = await getWagerTransaction(refund.body.transactionId as string);
+
+      expect(status).toBe(200);
+      expect(body.status).toBe("PROCESSED");
+      expect(body.referenceTransactionId).toBe(bet.body.transactionId);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 200 with status REJECTED failureCode and processedAt for a BET rejected by insufficient funds", async () => {
+    const walletId = await insertWallet("20.00");
+    try {
+      const bet = await postBet(betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(bet.status).toBe(422);
+      expect(bet.body.status).toBe("REJECTED");
+
+      const { status, body } = await getWagerTransaction(bet.body.transactionId as string);
+
+      expect(status).toBe(200);
+      expect(body.status).toBe("REJECTED");
+      expect(body.failureCode).toBe("INSUFFICIENT_FUNDS");
+      expect(typeof body.processedAt).toBe("string");
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 200 with status PENDING_REFERENCE and no failureCode processedAt or referenceTransactionId", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const refund = await postBet(
+        betPayload(walletId, { kind: "REFUND", money: { amount: "25.00", currency: "BRL" }, referenceExternalTransactionId: randomUUID() }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(refund.status).toBe(202);
+      expect(refund.body.status).toBe("PENDING_REFERENCE");
+
+      const { status, body } = await getWagerTransaction(refund.body.transactionId as string);
+
+      expect(status).toBe(200);
+      expect(body.status).toBe("PENDING_REFERENCE");
+      expect(body.failureCode).toBeUndefined();
+      expect(body.processedAt).toBeUndefined();
+      expect(body.referenceTransactionId).toBeUndefined();
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 404 for a well-formed but unknown id", async () => {
+    const { status } = await getWagerTransaction("00000000-0000-0000-0000-000000000000");
+    expect(status).toBe(404);
+  });
+
+  test("returns 400 for a malformed non-UUID id", async () => {
+    const { status } = await getWagerTransaction("not-a-uuid");
+    expect(status).toBe(400);
+  });
+
+  test("response body contains exactly status kind money referenceTransactionId failureCode and processedAt, never payloadHash or other identifiers", async () => {
+    const walletId = await insertWallet("20.00");
+    try {
+      const processed = await postBet(betPayload(walletId, { money: { amount: "10.00", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(processed.status).toBe(201);
+      const processedGet = await getWagerTransaction(processed.body.transactionId as string);
+      expect(Object.keys(processedGet.body).sort()).toEqual(["kind", "money", "processedAt", "status"]);
+
+      const rejected = await postBet(betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(rejected.status).toBe(422);
+      const rejectedGet = await getWagerTransaction(rejected.body.transactionId as string);
+      expect(Object.keys(rejectedGet.body).sort()).toEqual(["failureCode", "kind", "money", "processedAt", "status"]);
+
+      const pendingReference = await postBet(
+        betPayload(walletId, { kind: "REFUND", money: { amount: "5.00", currency: "BRL" }, referenceExternalTransactionId: randomUUID() }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(pendingReference.status).toBe(202);
+      const pendingReferenceGet = await getWagerTransaction(pendingReference.body.transactionId as string);
+      expect(Object.keys(pendingReferenceGet.body).sort()).toEqual(["kind", "money", "status"]);
     } finally {
       await deleteWalletCascade(walletId);
     }

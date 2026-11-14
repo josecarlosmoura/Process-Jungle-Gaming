@@ -1,3 +1,4 @@
+import { ResourceNotFoundError } from "./domain-error";
 import type { FailureCode } from "./failure-code";
 import type { Money } from "./money";
 
@@ -80,6 +81,13 @@ export class LedgerDirectionNotApplicableError extends Error {
   constructor(transactionId: string, kind: WagerTransactionKind) {
     super(`WagerTransaction "${transactionId}" of kind "${kind}" has no applicable ledger direction`);
     this.name = "LedgerDirectionNotApplicableError";
+  }
+}
+
+export class WagerTransactionNotFoundError extends ResourceNotFoundError {
+  constructor(transactionId: string) {
+    super(`WagerTransaction "${transactionId}" was not found`);
+    this.name = "WagerTransactionNotFoundError";
   }
 }
 

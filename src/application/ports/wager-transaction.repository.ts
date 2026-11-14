@@ -3,6 +3,7 @@ import type { ReversalKind, WagerTransaction } from "../../domain/wager-transact
 export const WAGER_TRANSACTION_REPOSITORY_INTERFACE = Symbol("WagerTransactionRepository");
 
 export interface WagerTransactionRepository {
+  findById(id: string): Promise<WagerTransaction | null>;
   findByIdempotencyKey(key: string): Promise<WagerTransaction | null>;
   findByProviderAndExternalId(
     providerId: string,

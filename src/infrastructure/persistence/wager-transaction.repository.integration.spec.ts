@@ -135,6 +135,40 @@ describe("WagerTransactionMikroOrmRepository - round-trip", () => {
   });
 });
 
+describe("WagerTransactionMikroOrmRepository - findById", () => {
+  test("returns the persisted transaction when it exists, and null when it does not", async () => {
+    const walletId = await seedWallet();
+    const id = randomUUID();
+    try {
+      const transaction = WagerTransaction.create({
+        id,
+        providerId: "provider-w",
+        externalTransactionId: randomUUID(),
+        idempotencyKey: `provider-w:${randomUUID()}`,
+        payloadHash: "e".repeat(64),
+        walletId,
+        playerId: randomUUID(),
+        roundId: randomUUID(),
+        gameId: "slot-4",
+        kind: "BET",
+        money: Money.from({ amount: "12.00", currency: "BRL" }),
+      });
+      await makeRepo().save(transaction);
+
+      const found = await makeRepo().findById(id);
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(id);
+      expect(found?.status).toBe("PENDING");
+
+      const notFound = await makeRepo().findById(randomUUID());
+      expect(notFound).toBeNull();
+    } finally {
+      await deleteTransaction(id);
+      await deleteWallet(walletId);
+    }
+  });
+});
+
 describe("WagerTransactionMikroOrmRepository - findReversalOf", () => {
   test("finds a PROCESSED reversal of the given kind pointing at the reference, and is kind-specific", async () => {
     const walletId = await seedWallet();

@@ -13,6 +13,7 @@ import { WAGER_TRANSACTION_REPOSITORY_INTERFACE } from "../../application/ports/
 import { WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE } from "../../application/ports/wallet-ledger-entry.repository";
 import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../../application/ports/outbox-message.repository";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
+import { GetWagerTransactionUseCase } from "../../application/use-cases/get-wager-transaction.use-case";
 import { ReferenceResolver } from "../../application/reference-resolver";
 import { WageringController } from "./wagering.controller";
 
@@ -31,6 +32,7 @@ import { WageringController } from "./wagering.controller";
     { provide: OUTBOX_MESSAGE_REPOSITORY_INTERFACE, useClass: OutboxMessageMikroOrmRepository },
     ReferenceResolver,
     ProcessWagerTransactionUseCase,
+    GetWagerTransactionUseCase,
   ],
   // SqsConsumerModule precisa injetar literalmente esta mesma instancia - nunca reconstruir o
   // provider com sua propria fiacao de repositorios (CLAUDE.md: "reutilizando EXATAMENTE o mesmo

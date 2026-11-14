@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Headers, HttpStatus, Post, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, HttpStatus, Param, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { z } from "zod";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
@@ -6,7 +6,10 @@ import {
   ProcessWagerTransactionUseCase,
   type ProcessWagerTransactionResult,
 } from "../../application/use-cases/process-wager-transaction.use-case";
+// biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
+import { GetWagerTransactionUseCase } from "../../application/use-cases/get-wager-transaction.use-case";
 import { Money, type MoneyProps } from "../../domain/money";
+import type { WagerTransaction } from "../../domain/wager-transaction";
 
 // Kinds cuja referencia e obrigatoria - checado aqui, na borda do payload, para que a ausencia
 // vire 400 INVALID_PAYLOAD (zod) e nunca alcance WagerTransaction.create(), cujo throw
@@ -48,9 +51,34 @@ interface ProcessWagerTransactionResponseBody {
   failureCode?: string;
 }
 
+const transactionIdParamSchema = z.string().uuid();
+
+interface GetWagerTransactionResponseBody {
+  status: string;
+  kind: string;
+  money: MoneyProps;
+  referenceTransactionId?: string;
+  failureCode?: string;
+  processedAt?: Date;
+}
+
+export function toGetResponseBody(transaction: WagerTransaction): GetWagerTransactionResponseBody {
+  return {
+    status: transaction.status,
+    kind: transaction.kind,
+    money: transaction.money.toJSON(),
+    ...(transaction.referenceTransactionId ? { referenceTransactionId: transaction.referenceTransactionId } : {}),
+    ...(transaction.failureCode ? { failureCode: transaction.failureCode } : {}),
+    ...(transaction.processedAt ? { processedAt: transaction.processedAt } : {}),
+  };
+}
+
 @Controller("wagering/transactions")
 export class WageringController {
-  constructor(private readonly processWagerTransactionUseCase: ProcessWagerTransactionUseCase) {}
+  constructor(
+    private readonly processWagerTransactionUseCase: ProcessWagerTransactionUseCase,
+    private readonly getWagerTransactionUseCase: GetWagerTransactionUseCase,
+  ) {}
 
   @Post()
   async create(
@@ -83,6 +111,17 @@ export class WageringController {
     });
 
     res.status(this.statusFor(result)).json(this.toResponseBody(result));
+  }
+
+  @Get(":transactionId")
+  async get(@Param("transactionId") transactionId: string): Promise<GetWagerTransactionResponseBody> {
+    const parsed = transactionIdParamSchema.safeParse(transactionId);
+    if (!parsed.success) {
+      throw new BadRequestException("transactionId: must be a valid UUID");
+    }
+
+    const transaction = await this.getWagerTransactionUseCase.execute(transactionId);
+    return toGetResponseBody(transaction);
   }
 
   private statusFor(result: ProcessWagerTransactionResult): number {
