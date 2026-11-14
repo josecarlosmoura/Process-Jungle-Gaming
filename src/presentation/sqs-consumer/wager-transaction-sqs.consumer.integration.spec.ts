@@ -4,6 +4,7 @@ import {
   CreateQueueCommand,
   DeleteMessageCommand,
   DeleteQueueCommand,
+  GetQueueAttributesCommand,
   ReceiveMessageCommand,
   SendMessageCommand,
   SQSClient,
@@ -160,15 +161,29 @@ async function findQueuedMessage(businessMessageId: string): Promise<{ receiptHa
   return null;
 }
 
-async function waitUntilDrained(businessMessageId: string, timeoutMs = 10_000): Promise<void> {
+// Nunca usa ReceiveMessageCommand para esperar o dreno - um ReceiveMessageCommand (mesmo so para
+// "conferir se ainda esta la") torna a mensagem invisivel pelo VisibilityTimeout da fila para
+// QUALQUER consumidor, inclusive o consumer de verdade sob teste, disputando a propria mensagem
+// que deveria deixar livre para ele processar (bug real observado: o teste ficava roubando a
+// mensagem do consumer em loop e nunca convergia). GetQueueAttributesCommand le só a contagem
+// agregada, sem tocar/travar nenhuma mensagem especifica.
+async function waitUntilDrained(timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!(await findQueuedMessage(businessMessageId))) {
+    const attributes = await sqsClient.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: queueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+      }),
+    );
+    const visible = Number(attributes.Attributes?.ApproximateNumberOfMessages ?? "0");
+    const inFlight = Number(attributes.Attributes?.ApproximateNumberOfMessagesNotVisible ?? "0");
+    if (visible === 0 && inFlight === 0) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`message ${businessMessageId} was never acked/removed from the queue within ${timeoutMs}ms`);
+  throw new Error(`queue never drained within ${timeoutMs}ms`);
 }
 
 function wagerTransactionRequestedBody(messageId: string, walletId: string): string {
@@ -395,7 +410,7 @@ describe("WagerTransactionSqsConsumer - integração (Postgres + LocalStack reai
         const secondConsumer = secondModuleRef.get(WagerTransactionSqsConsumer);
         try {
           secondConsumer.onApplicationBootstrap();
-          await waitUntilDrained(businessMessageId);
+          await waitUntilDrained();
 
           expect(await readWalletBalance(walletId)).toBe("985.00");
           expect(await countWhere("wager_transactions", "wallet_id", walletId)).toBe(1);
