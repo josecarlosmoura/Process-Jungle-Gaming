@@ -16,6 +16,16 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   chamadas de paginação não repete nem pula itens. `nextCursor` vem preenchido em toda página não
   vazia (mesmo a última, parcial) — o cliente só descobre o fim ao receber uma página vazia.
   `404` para wallet inexistente, `400` para `walletId`/`cursor` inválidos.
+- `POST /wallets/:walletId/reconciliation` — recalcula o saldo a partir do ledger inteiro (soma
+  `CREDIT`/subtrai `DEBIT` via `Money`, nunca `number`, paginando internamente) e compara com o
+  saldo materializado. Responde sempre `200` com `{walletId, storedBalance, calculatedBalance,
+  difference, consistent, checkedEntries}` — a divergência nunca é corrigida automaticamente, só
+  sinalizada: quando `consistent: false`, gera um log estruturado (nível `error`) e incrementa
+  `ReconciliationMetrics.divergenceCount` (contador em memória, formalizado como métrica exposta
+  só na T306). Leitura combinada (saldo + ledger) em uma única transação `REPEATABLE READ`, sem
+  lock pessimista — não compete por lock com débito/crédito normal, mas também não lê um estado
+  inconsistente entre as duas leituras. `404` para wallet inexistente, `400` para `walletId`
+  inválido.
 - `POST /wagering/transactions` (header `Idempotency-Key` obrigatório) — processa `kind: "BET"`,
   `"WIN"`, `"LOSS"`, `"REFUND"` e `"ROLLBACK"`:
   - `BET`: débito do saldo com lock pessimista por `walletId`, rejeição auditável por saldo
@@ -163,6 +173,19 @@ curl -i http://localhost:3000/providers/provider-a/wagering/transactions/bet-001
 curl -s "http://localhost:3000/wallets/<wallet-id>/ledger?limit=2" | tee /tmp/page1.json
 CURSOR=$(jq -r '.nextCursor' /tmp/page1.json)
 curl -s "http://localhost:3000/wallets/<wallet-id>/ledger?cursor=$CURSOR&limit=2"
+
+# reconciliacao: saldo materializado deve bater com o recalculado a partir do ledger
+curl -i -X POST http://localhost:3000/wallets/<wallet-id>/reconciliation
+# esperado: consistent=true, difference 0.00
+
+# divergencia artificial (so para teste - nunca fazer isso em produção)
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "update wallets set balance_amount = balance_amount + 1 where id = '<wallet-id>';"
+curl -i -X POST http://localhost:3000/wallets/<wallet-id>/reconciliation
+# esperado: consistent=false, difference {"amount":"1.00",...}; log de erro na aplicacao;
+# o saldo no banco permanece divergente (nunca corrigido automaticamente)
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "update wallets set balance_amount = balance_amount - 1 where id = '<wallet-id>';"  # reverte
 
 # processa um WIN referenciando a BET acima (credita a wallet)
 curl -s -X POST http://localhost:3000/wagering/transactions \
