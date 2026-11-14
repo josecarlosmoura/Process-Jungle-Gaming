@@ -62,4 +62,8 @@ export class AppConfigService {
   get outboxPublisherBatchSize(): number {
     return this.configService.get("OUTBOX_PUBLISHER_BATCH_SIZE", { infer: true });
   }
+
+  get sqsConsumerWaitTimeSeconds(): number {
+    return this.configService.get("SQS_CONSUMER_WAIT_TIME_SECONDS", { infer: true });
+  }
 }

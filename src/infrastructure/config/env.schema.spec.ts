@@ -52,4 +52,23 @@ describe("validateEnv", () => {
     expect(overridden.OUTBOX_PUBLISHER_POLL_INTERVAL_MS).toBe(500);
     expect(overridden.OUTBOX_PUBLISHER_BATCH_SIZE).toBe(5);
   });
+
+  test("defaults SQS_CONSUMER_WAIT_TIME_SECONDS to 10, and accepts an override within 0-20", () => {
+    const defaults = validateEnv(validEnv);
+    expect(defaults.SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(10);
+
+    const overridden = validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "5" });
+    expect(overridden.SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(5);
+
+    // Limites exatos aceitos: 0 (sem long polling) e 20 (maximo do proprio SQS).
+    expect(validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "0" }).SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(0);
+    expect(validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "20" }).SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(20);
+
+    expect(() => validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "-1" })).toThrow(
+      "SQS_CONSUMER_WAIT_TIME_SECONDS",
+    );
+    expect(() => validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "21" })).toThrow(
+      "SQS_CONSUMER_WAIT_TIME_SECONDS",
+    );
+  });
 });

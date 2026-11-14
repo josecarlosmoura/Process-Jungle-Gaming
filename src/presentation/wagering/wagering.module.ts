@@ -32,5 +32,9 @@ import { WageringController } from "./wagering.controller";
     ReferenceResolver,
     ProcessWagerTransactionUseCase,
   ],
+  // SqsConsumerModule precisa injetar literalmente esta mesma instancia - nunca reconstruir o
+  // provider com sua propria fiacao de repositorios (CLAUDE.md: "reutilizando EXATAMENTE o mesmo
+  // use case" entre HTTP e SQS).
+  exports: [ProcessWagerTransactionUseCase],
 })
 export class WageringModule {}

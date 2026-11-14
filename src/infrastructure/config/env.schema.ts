@@ -29,6 +29,9 @@ export const envSchema = z.object({
   LEDGER_CURSOR_SECRET: z.string().min(1),
   OUTBOX_PUBLISHER_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2000),
   OUTBOX_PUBLISHER_BATCH_SIZE: z.coerce.number().int().min(1).default(20),
+  // Maximo do proprio SQS e 20 (ReceiveMessageCommand.WaitTimeSeconds) - long polling de
+  // verdade, mas baixo o bastante para um SIGTERM em teste manual nao ficar preso por ate 20s.
+  SQS_CONSUMER_WAIT_TIME_SECONDS: z.coerce.number().int().min(0).max(20).default(10),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

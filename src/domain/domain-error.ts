@@ -43,3 +43,15 @@ export class TransientInfrastructureError extends DomainError {
     this.name = "TransientInfrastructureError";
   }
 }
+
+// Mesma distincao que DomainErrorExceptionFilter.statusFor() ja mantem para HTTP (AD-007), aqui
+// decidindo ack (nunca reentrega) vs. retry - nunca uma segunda lista de instanceof por tipo
+// especifico, que teria que lembrar de um novo subtipo de DomainError em dois lugares.
+export function isTransientInfrastructureFailure(error: unknown): boolean {
+  if (error instanceof DomainError) {
+    return error instanceof TransientInfrastructureError;
+  }
+  // Erro desconhecido (bug ou categoria futura que esqueceu de estender DomainError) - tratado
+  // como transitorio por seguranca: nunca ack de algo que ninguem classificou.
+  return true;
+}

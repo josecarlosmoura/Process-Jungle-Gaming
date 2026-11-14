@@ -55,6 +55,16 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   com backoff exponencial + jitter (`attempts`/`next_attempt_at`), sem limite de tentativas e sem
   derrubar o worker. Intervalo de polling e tamanho do lote configuráveis via
   `OUTBOX_PUBLISHER_POLL_INTERVAL_MS`/`OUTBOX_PUBLISHER_BATCH_SIZE` (defaults `2000`/`20`).
+- **SQS Consumer** (`wager-transactions.fifo`) — segunda porta de entrada para operações de
+  aposta, reutilizando exatamente o mesmo caso de uso do HTTP. Deduplica mensagens por
+  `(consumerName, messageId)` em `inbox_messages`, numa única transação SQL com o efeito financeiro
+  (mesma garantia de atomicidade da outbox). `ack` (remoção da mensagem) só acontece depois do
+  commit; erro de negócio permanente (ex.: payload inválido, wallet inexistente) também é `ack`ado
+  — nunca reentregue; erro transitório de infraestrutura nunca é `ack`ado, a mensagem volta à
+  visibilidade da fila para retry. Processa uma mensagem por vez
+  (`MaxNumberOfMessages: 1`); em `SIGTERM` (`app.enableShutdownHooks()`), para de buscar novas
+  mensagens e aguarda a mensagem em andamento terminar antes do processo encerrar. Tempo de long
+  polling configurável via `SQS_CONSUMER_WAIT_TIME_SECONDS` (default `10`, máximo `20`).
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
 
 ## Setup local
@@ -132,4 +142,31 @@ docker compose exec postgres psql -U wagering -d wagering_dev -c \
 aws --endpoint-url=http://localhost:4566 sqs receive-message \
   --queue-url "$(aws --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name integration-events.fifo --query QueueUrl --output text)" \
   --attribute-names All
+
+# publica uma BET via fila (segunda porta de entrada, mesmo efeito que o curl HTTP acima)
+QUEUE_URL=$(aws --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name wager-transactions.fifo --query QueueUrl --output text)
+aws --endpoint-url=http://localhost:4566 sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-group-id "<wallet-id>" \
+  --message-deduplication-id "msg-sqs-001" \
+  --message-body '{"messageId":"msg-sqs-001","type":"WagerTransactionRequested","occurredAt":"2026-07-29T15:00:00.000Z","data":{"providerId":"provider-a","externalTransactionId":"bet-sqs-001","idempotencyKey":"provider-a:bet-sqs-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-sqs-1","gameId":"fortune-chimp","kind":"BET","money":{"amount":"15.00","currency":"BRL"}}}'
+
+sleep 2
+curl -s http://localhost:3000/wallets/<wallet-id>   # saldo debitado em 15.00
+
+# reenviar a MESMA mensagem de negócio (mesmo "messageId" no corpo, outro MessageDeduplicationId
+# simulando uma redelivery real) nao debita de novo
+aws --endpoint-url=http://localhost:4566 sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-group-id "<wallet-id>" \
+  --message-deduplication-id "msg-sqs-001-retry" \
+  --message-body '{"messageId":"msg-sqs-001", ... mesmo corpo de data ...}'
+sleep 2
+curl -s http://localhost:3000/wallets/<wallet-id>   # saldo inalterado
+
+# SIGTERM gracioso: para de buscar nova mensagem, conclui a que estiver em andamento
+# (rodando fora do docker compose, ex.: `bun run start:dev` ou `node dist/main.js`)
+kill -TERM <pid-do-processo-node>
+# log esperado antes do processo encerrar:
+# "[WagerTransactionSqsConsumer] parando de receber novas mensagens de wager-transactions.fifo"
 ```
