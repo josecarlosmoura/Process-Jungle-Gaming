@@ -6,7 +6,11 @@ import {
   SetQueueAttributesCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
-import { INTEGRATION_EVENTS_QUEUE_NAME, WAGER_TRANSACTIONS_DLQ_NAME, WAGER_TRANSACTIONS_QUEUE_NAME } from "./queue-names";
+import {
+  INTEGRATION_EVENTS_QUEUE_NAME,
+  WAGER_TRANSACTIONS_DLQ_NAME,
+  WAGER_TRANSACTIONS_QUEUE_NAME,
+} from "./queue-names";
 
 const client = new SQSClient({
   endpoint: "http://localhost:4566",
@@ -20,7 +24,9 @@ function runSetupScript(): void {
     env: { ...process.env, SQS_ENDPOINT_URL: "http://localhost:4566", AWS_REGION: "us-east-1" },
   });
   if (result.exitCode !== 0) {
-    throw new Error(`setup-queues.sh exited with code ${result.exitCode}: ${result.stderr.toString()}`);
+    throw new Error(
+      `setup-queues.sh exited with code ${result.exitCode}: ${result.stderr.toString()}`,
+    );
   }
 }
 
@@ -68,11 +74,18 @@ describe("queue provisioning", () => {
     async () => {
       runSetupScript();
 
-      const mainUrl = await client.send(new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }));
-      const dlqUrl = await client.send(new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_DLQ_NAME }));
+      const mainUrl = await client.send(
+        new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }),
+      );
+      const dlqUrl = await client.send(
+        new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_DLQ_NAME }),
+      );
 
       const mainAttributes = await client.send(
-        new GetQueueAttributesCommand({ QueueUrl: mainUrl.QueueUrl, AttributeNames: ["RedrivePolicy"] }),
+        new GetQueueAttributesCommand({
+          QueueUrl: mainUrl.QueueUrl,
+          AttributeNames: ["RedrivePolicy"],
+        }),
       );
       const dlqAttributes = await client.send(
         new GetQueueAttributesCommand({ QueueUrl: dlqUrl.QueueUrl, AttributeNames: ["QueueArn"] }),
@@ -86,11 +99,35 @@ describe("queue provisioning", () => {
   );
 
   test(
+    "the main queue RedrivePolicy maxReceiveCount is 5",
+    async () => {
+      runSetupScript();
+
+      const mainUrl = await client.send(
+        new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }),
+      );
+      const mainAttributes = await client.send(
+        new GetQueueAttributesCommand({
+          QueueUrl: mainUrl.QueueUrl,
+          AttributeNames: ["RedrivePolicy"],
+        }),
+      );
+
+      const redrivePolicy = JSON.parse(mainAttributes.Attributes?.RedrivePolicy ?? "{}");
+
+      expect(redrivePolicy.maxReceiveCount).toBe(5);
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "running the provisioning script again after an attribute diverged out-of-band converges that attribute back, instead of failing with QueueAlreadyExists",
     async () => {
       runSetupScript();
 
-      const mainUrl = await client.send(new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }));
+      const mainUrl = await client.send(
+        new GetQueueUrlCommand({ QueueName: WAGER_TRANSACTIONS_QUEUE_NAME }),
+      );
       await client.send(
         new SetQueueAttributesCommand({
           QueueUrl: mainUrl.QueueUrl,
@@ -101,7 +138,10 @@ describe("queue provisioning", () => {
       runSetupScript();
 
       const attributes = await client.send(
-        new GetQueueAttributesCommand({ QueueUrl: mainUrl.QueueUrl, AttributeNames: ["VisibilityTimeout"] }),
+        new GetQueueAttributesCommand({
+          QueueUrl: mainUrl.QueueUrl,
+          AttributeNames: ["VisibilityTimeout"],
+        }),
       );
 
       expect(attributes.Attributes?.VisibilityTimeout).toBe("30");
@@ -117,7 +157,9 @@ describe("queue provisioning", () => {
       const count = await countQueuesNamed(INTEGRATION_EVENTS_QUEUE_NAME);
       expect(count).toBe(1);
 
-      const url = await client.send(new GetQueueUrlCommand({ QueueName: INTEGRATION_EVENTS_QUEUE_NAME }));
+      const url = await client.send(
+        new GetQueueUrlCommand({ QueueName: INTEGRATION_EVENTS_QUEUE_NAME }),
+      );
       const attributes = await client.send(
         new GetQueueAttributesCommand({ QueueUrl: url.QueueUrl, AttributeNames: ["FifoQueue"] }),
       );

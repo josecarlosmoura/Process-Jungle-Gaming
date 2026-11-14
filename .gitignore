@@ -57,6 +57,7 @@ Documents/
 .claude/
 .windsurf/
 .specs/
+graphify-out/
 CLAUDE.md
 
 # Harness de testes e mocks de integração

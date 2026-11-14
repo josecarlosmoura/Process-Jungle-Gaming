@@ -70,4 +70,12 @@ export class AppConfigService {
   get wagerTransactionsQueueName(): string {
     return this.configService.get("WAGER_TRANSACTIONS_QUEUE_NAME", { infer: true });
   }
+
+  get dlqMonitorPollIntervalMs(): number {
+    return this.configService.get("DLQ_MONITOR_POLL_INTERVAL_MS", { infer: true });
+  }
+
+  get wagerTransactionsDlqName(): string {
+    return this.configService.get("WAGER_TRANSACTIONS_DLQ_NAME", { infer: true });
+  }
 }

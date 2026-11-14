@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { WAGER_TRANSACTIONS_QUEUE_NAME } from "../messaging/queue-names";
+import {
+  WAGER_TRANSACTIONS_DLQ_NAME,
+  WAGER_TRANSACTIONS_QUEUE_NAME,
+} from "../messaging/queue-names";
 
 // z.string().url() delega ao parser WHATWG URL, que aceita "localhost:4566" como uma URL
 // valida de esquema "localhost:" - sem isto, um LOCALSTACK_ENDPOINT sem "http://" passaria
@@ -37,6 +40,11 @@ export const envSchema = z.object({
   // uma fila FIFO descartavel propria, isolada de qualquer instancia real da app rodando ao lado
   // (que sempre consome "wager-transactions.fifo" por padrao) - nunca usado em producao.
   WAGER_TRANSACTIONS_QUEUE_NAME: z.string().min(1).default(WAGER_TRANSACTIONS_QUEUE_NAME),
+  // Intervalo de poll do DlqMonitorScheduler (GetQueueAttributesCommand - nunca consome a DLQ).
+  DLQ_MONITOR_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(5000),
+  // Mesmo principio de WAGER_TRANSACTIONS_QUEUE_NAME acima - so para isolar um teste de
+  // integracao numa DLQ descartavel propria, nunca usado em producao.
+  WAGER_TRANSACTIONS_DLQ_NAME: z.string().min(1).default(WAGER_TRANSACTIONS_DLQ_NAME),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

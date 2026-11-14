@@ -7,8 +7,12 @@ MAIN_QUEUE_NAME="wager-transactions.fifo"
 DLQ_NAME="wager-transactions-dlq.fifo"
 INTEGRATION_EVENTS_QUEUE_NAME="integration-events.fifo"
 VISIBILITY_TIMEOUT_SECONDS=30
-# Valor provisorio: a politica final de retry/backoff da DLQ e escolhida e justificada numa
-# tarefa futura dedicada a isso. Aqui so precisa existir a associacao de redrive policy.
+# 5 tentativas x 30s de VisibilityTimeout = no maximo ~150s de redelivery antes da DLQ - curto
+# de proposito (Documents/ARCHITECTURE.md secao 2.2): a DLQ existe para capturar falha de
+# INFRAESTRUTURA no processamento de uma entrada, nunca espera por um evento de negocio ainda
+# nao chegado (isso e papel de PENDING_REFERENCE, ate 10 tentativas/24h) nem perda de um evento
+# ja comitado (outbox, tentativas infinitas). Represar a fila principal por mais tempo nao traria
+# beneficio, e uma mensagem na DLQ nao e dado perdido - fica retida para auditoria manual.
 MAX_RECEIVE_COUNT=5
 
 aws_sqs() {

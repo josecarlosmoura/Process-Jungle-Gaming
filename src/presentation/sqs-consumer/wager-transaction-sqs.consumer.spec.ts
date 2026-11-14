@@ -39,7 +39,10 @@ function fakeSqsClient(messageBatches: Message[][]): {
   let receiveCalls = 0;
   const deletedHandles: string[] = [];
   let index = 0;
-  const send = async (command: { constructor: { name: string }; input?: { ReceiptHandle?: string } }) => {
+  const send = async (command: {
+    constructor: { name: string };
+    input?: { ReceiptHandle?: string };
+  }) => {
     switch (command.constructor.name) {
       case "GetQueueUrlCommand":
         return { QueueUrl: "http://localhost:4566/000000000000/wager-transactions.fifo" };
@@ -87,7 +90,13 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
+    const consumer = new WagerTransactionSqsConsumer(
+      fakeOrm(),
+      client,
+      useCase,
+      0,
+      "wager-transactions.fifo",
+    );
 
     try {
       consumer.onApplicationBootstrap();
@@ -102,7 +111,13 @@ describe("WagerTransactionSqsConsumer", () => {
 
   test("a message with a malformed money amount is deleted without ever reaching the use case", async () => {
     const { client, deletedHandles } = fakeSqsClient([
-      [{ MessageId: "sqs-1", ReceiptHandle: "handle-1", Body: validEnvelopeBody({ money: { amount: "", currency: "BRL" } }) }],
+      [
+        {
+          MessageId: "sqs-1",
+          ReceiptHandle: "handle-1",
+          Body: validEnvelopeBody({ money: { amount: "", currency: "BRL" } }),
+        },
+      ],
     ]);
     let useCaseCalls = 0;
     const useCase = {
@@ -111,7 +126,13 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
+    const consumer = new WagerTransactionSqsConsumer(
+      fakeOrm(),
+      client,
+      useCase,
+      0,
+      "wager-transactions.fifo",
+    );
 
     try {
       consumer.onApplicationBootstrap();
@@ -119,6 +140,61 @@ describe("WagerTransactionSqsConsumer", () => {
 
       expect(useCaseCalls).toBe(0);
       expect(deletedHandles()).toEqual(["handle-1"]);
+    } finally {
+      await consumer.onModuleDestroy();
+    }
+  });
+
+  test("a message whose use case resolves successfully is deleted from the queue", async () => {
+    const { client, deletedHandles } = fakeSqsClient([
+      [{ MessageId: "sqs-1", ReceiptHandle: "handle-1", Body: validEnvelopeBody() }],
+    ]);
+    const useCase = {
+      execute: async () => ({ outcome: "PROCESSED" }),
+    } as unknown as ConsumeWagerTransactionMessageUseCase;
+    const consumer = new WagerTransactionSqsConsumer(
+      fakeOrm(),
+      client,
+      useCase,
+      0,
+      "wager-transactions.fifo",
+    );
+
+    try {
+      consumer.onApplicationBootstrap();
+      await wait(50);
+
+      expect(deletedHandles()).toEqual(["handle-1"]);
+    } finally {
+      await consumer.onModuleDestroy();
+    }
+  });
+
+  test("a message whose use case throws is never deleted, left for the queue's natural redelivery", async () => {
+    const { client, deletedHandles } = fakeSqsClient([
+      [{ MessageId: "sqs-1", ReceiptHandle: "handle-1", Body: validEnvelopeBody() }],
+    ]);
+    let useCaseCalls = 0;
+    const useCase = {
+      execute: async () => {
+        useCaseCalls += 1;
+        throw new Error("simulated transient infrastructure failure");
+      },
+    } as unknown as ConsumeWagerTransactionMessageUseCase;
+    const consumer = new WagerTransactionSqsConsumer(
+      fakeOrm(),
+      client,
+      useCase,
+      0,
+      "wager-transactions.fifo",
+    );
+
+    try {
+      consumer.onApplicationBootstrap();
+      await wait(50);
+
+      expect(useCaseCalls).toBe(1);
+      expect(deletedHandles()).toEqual([]);
     } finally {
       await consumer.onModuleDestroy();
     }
@@ -140,7 +216,13 @@ describe("WagerTransactionSqsConsumer", () => {
         return { outcome: "PROCESSED" };
       },
     } as unknown as ConsumeWagerTransactionMessageUseCase;
-    const consumer = new WagerTransactionSqsConsumer(fakeOrm(), client, useCase, 0, "wager-transactions.fifo");
+    const consumer = new WagerTransactionSqsConsumer(
+      fakeOrm(),
+      client,
+      useCase,
+      0,
+      "wager-transactions.fifo",
+    );
 
     consumer.onApplicationBootstrap();
     await wait(30);

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AppConfigModule } from "./infrastructure/config/app-config.module";
+import { DlqMonitorModule } from "./presentation/dlq-monitor/dlq-monitor.module";
 import { DomainErrorHandlingModule } from "./presentation/common/domain-error-handling.module";
 import { HealthModule } from "./presentation/health/health.module";
 import { OutboxPublisherModule } from "./presentation/outbox-publisher/outbox-publisher.module";
@@ -16,6 +17,7 @@ import { WageringModule } from "./presentation/wagering/wagering.module";
     WageringModule,
     OutboxPublisherModule,
     SqsConsumerModule,
+    DlqMonitorModule,
   ],
 })
 export class AppModule {}

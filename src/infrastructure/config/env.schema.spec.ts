@@ -61,8 +61,14 @@ describe("validateEnv", () => {
     expect(overridden.SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(5);
 
     // Limites exatos aceitos: 0 (sem long polling) e 20 (maximo do proprio SQS).
-    expect(validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "0" }).SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(0);
-    expect(validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "20" }).SQS_CONSUMER_WAIT_TIME_SECONDS).toBe(20);
+    expect(
+      validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "0" })
+        .SQS_CONSUMER_WAIT_TIME_SECONDS,
+    ).toBe(0);
+    expect(
+      validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "20" })
+        .SQS_CONSUMER_WAIT_TIME_SECONDS,
+    ).toBe(20);
 
     expect(() => validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "-1" })).toThrow(
       "SQS_CONSUMER_WAIT_TIME_SECONDS",
@@ -70,5 +76,13 @@ describe("validateEnv", () => {
     expect(() => validateEnv({ ...validEnv, SQS_CONSUMER_WAIT_TIME_SECONDS: "21" })).toThrow(
       "SQS_CONSUMER_WAIT_TIME_SECONDS",
     );
+  });
+
+  test("defaults DLQ_MONITOR_POLL_INTERVAL_MS to 5000, and accepts an override", () => {
+    const defaults = validateEnv(validEnv);
+    expect(defaults.DLQ_MONITOR_POLL_INTERVAL_MS).toBe(5000);
+
+    const overridden = validateEnv({ ...validEnv, DLQ_MONITOR_POLL_INTERVAL_MS: "1000" });
+    expect(overridden.DLQ_MONITOR_POLL_INTERVAL_MS).toBe(1000);
   });
 });

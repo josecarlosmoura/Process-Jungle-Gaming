@@ -65,6 +65,11 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   (`MaxNumberOfMessages: 1`); em `SIGTERM` (`app.enableShutdownHooks()`), para de buscar novas
   mensagens e aguarda a mensagem em andamento terminar antes do processo encerrar. Tempo de long
   polling configurável via `SQS_CONSUMER_WAIT_TIME_SECONDS` (default `10`, máximo `20`).
+- **DLQ** (`wager-transactions-dlq.fifo`) — redrive policy final: `maxReceiveCount=5` (no máximo
+  ~150s de redelivery antes da DLQ, justificativa em `Documents/ARCHITECTURE.md` seção 2.2).
+  `DlqMonitorScheduler` roda em toda instância e loga um aviso sempre que a DLQ tiver uma ou mais
+  mensagens (`ApproximateNumberOfMessages`, sem consumir nem apagar nada dela — requer auditoria
+  manual). Intervalo de polling configurável via `DLQ_MONITOR_POLL_INTERVAL_MS` (default `5000`).
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
 
 ## Setup local
@@ -169,4 +174,21 @@ curl -s http://localhost:3000/wallets/<wallet-id>   # saldo inalterado
 kill -TERM <pid-do-processo-node>
 # log esperado antes do processo encerrar:
 # "[WagerTransactionSqsConsumer] parando de receber novas mensagens de wager-transactions.fifo"
+
+# DLQ: forcar uma falha permanente (infraestrutura indisponivel) e confirmar que a mensagem
+# aparece na DLQ apos maxReceiveCount=5 entregas (~150s, VisibilityTimeout=30s), e que o
+# DlqMonitorScheduler loga um aviso quando isso acontece
+docker compose stop postgres
+aws --endpoint-url=http://localhost:4566 sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-group-id "dlq-demo" \
+  --message-deduplication-id "msg-dlq-demo-001" \
+  --message-body '{"messageId":"msg-dlq-demo-001","type":"WagerTransactionRequested","occurredAt":"2026-07-29T15:00:00.000Z","data":{"providerId":"provider-a","externalTransactionId":"bet-dlq-demo-001","idempotencyKey":"provider-a:bet-dlq-demo-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-dlq-1","gameId":"fortune-chimp","kind":"BET","money":{"amount":"10.00","currency":"BRL"}}}'
+# esperar ~150s (5 tentativas x 30s de VisibilityTimeout); nos logs da aplicacao, esperado:
+# "[DlqMonitorScheduler] 1 mensagem(ns) detectada(s) em wager-transactions-dlq.fifo - requer auditoria manual"
+sleep 160
+docker compose start postgres
+DLQ_URL=$(aws --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name wager-transactions-dlq.fifo --query QueueUrl --output text)
+aws --endpoint-url=http://localhost:4566 sqs receive-message --queue-url "$DLQ_URL" --attribute-names All
+# esperado: a mensagem aparece na DLQ - nunca reprocessada automaticamente (requer auditoria manual)
 ```
