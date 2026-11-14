@@ -177,6 +177,17 @@ async function countLedgerEntries(transactionId: string): Promise<number> {
   return Number(rows[0]?.count ?? 0);
 }
 
+// Achado do Verifier independente (verification.md): countLedgerEntries() por si só nao prova a
+// direcao que o proprio nome do check promete - um bug que trocasse o ledgerEntry persistido por
+// outro (ex.: debit no lugar de credit) passaria pelo count=1 sem ser pego.
+async function ledgerDirectionFor(transactionId: string): Promise<string | null> {
+  const rows = await connection.execute<{ direction: string }[]>(
+    "select direction from wallet_ledger_entries where transaction_id = ?",
+    [transactionId],
+  );
+  return rows[0]?.direction ?? null;
+}
+
 async function outboxEventTypesForTransaction(transactionId: string): Promise<string[]> {
   const rows = await connection.execute<{ event_type: string }[]>(
     `select event_type from outbox_messages where payload -> 'data' ->> 'transactionId' = ? order by event_type asc`,
@@ -200,6 +211,7 @@ describe("ReprocessPendingReferenceUseCase.execute - integração (Postgres real
       expect(resolved?.status).toBe("PROCESSED");
       expect(resolved?.referenceTransactionId).toBe(bet.id);
       expect(await countLedgerEntries(refund.id)).toBe(1);
+      expect(await ledgerDirectionFor(refund.id)).toBe("CREDIT");
       expect(await outboxEventTypesForTransaction(refund.id)).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
     } finally {
       await deleteWalletCascade(walletId);
@@ -219,6 +231,7 @@ describe("ReprocessPendingReferenceUseCase.execute - integração (Postgres real
       const resolved = await reread(rollback.idempotencyKey);
       expect(resolved?.status).toBe("PROCESSED");
       expect(await countLedgerEntries(rollback.id)).toBe(1);
+      expect(await ledgerDirectionFor(rollback.id)).toBe("DEBIT");
     } finally {
       await deleteWalletCascade(walletId);
     }
