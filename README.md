@@ -47,6 +47,10 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     SQL do efeito principal, uma ou mais linhas em `outbox_messages` (`WagerTransactionProcessed`,
     `WagerTransactionRejected`, `WalletBalanceChanged` — só quando o saldo de fato muda — e
     `WagerTransactionPendingReference`).
+- `GET /wagering/transactions/:transactionId` — consulta o estado de uma transação pelo id
+  interno: `status`, `kind`, `money` e, quando presentes, `referenceTransactionId` e (quando
+  terminal) `failureCode`/`processedAt`. `404` para id inexistente, `400` para id malformado
+  (não-UUID).
 - **Outbox Publisher Worker** — roda em toda instância da aplicação (sem eleição de líder),
   reivindicando mensagens pendentes de `outbox_messages` via `FOR UPDATE SKIP LOCKED` e publicando
   cada uma na fila SQS `integration-events.fifo` (`MessageGroupId` = `aggregateId`,
@@ -137,6 +141,9 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider-a:bet-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"bet-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+
+# consulta a BET acima pelo id interno (transactionId devolvido no POST acima)
+curl -i http://localhost:3000/wagering/transactions/<transaction-id-da-bet>
 
 # processa um WIN referenciando a BET acima (credita a wallet)
 curl -s -X POST http://localhost:3000/wagering/transactions \
