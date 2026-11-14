@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
+import { RequestContext } from "@mikro-orm/core";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { EntityManager, MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../../infrastructure/config/env.schema";
@@ -59,9 +60,12 @@ function moneyOf(amount: string, currency = "BRL") {
   return Money.from({ amount, currency });
 }
 
+// orm.em.fork() em toda chamada de repositorio feita fora de um use case (que já abre sua própria
+// transação) - o em "global" não aceita save()/flush() direto (MikroORM 6: "cannotUseGlobalContext"),
+// mesmo padrão de wallet.repository.integration.spec.ts.
 async function insertWallet(balanceAmount: string, currency = "BRL"): Promise<string> {
   const id = randomUUID();
-  await new WalletMikroOrmRepository(orm.em).save(
+  await new WalletMikroOrmRepository(orm.em.fork()).save(
     Wallet.open({ id, playerId: randomUUID(), initialBalance: moneyOf(balanceAmount, currency) }),
   );
   return id;
@@ -108,7 +112,7 @@ async function saveProcessedReference(
     money: moneyOf(amount),
   });
   transaction.markProcessed(undefined, new Date());
-  await new WagerTransactionMikroOrmRepository(orm.em).save(transaction);
+  await new WagerTransactionMikroOrmRepository(orm.em.fork()).save(transaction);
   return transaction;
 }
 
@@ -127,7 +131,7 @@ async function saveRejectedReference(subject: Subject, kind: "BET" | "WIN", exte
     money: moneyOf(amount),
   });
   transaction.reject("INSUFFICIENT_FUNDS");
-  await new WagerTransactionMikroOrmRepository(orm.em).save(transaction);
+  await new WagerTransactionMikroOrmRepository(orm.em.fork()).save(transaction);
   return transaction;
 }
 
@@ -157,12 +161,12 @@ async function savePendingReferenceReversal(
     attempts: opts.attempts,
     nextAttemptAt: opts.nextAttemptAt ?? new Date(Date.now() - 1_000),
   });
-  await new WagerTransactionMikroOrmRepository(orm.em).save(transaction);
+  await new WagerTransactionMikroOrmRepository(orm.em.fork()).save(transaction);
   return transaction;
 }
 
 async function reread(idempotencyKey: string): Promise<WagerTransaction | null> {
-  return new WagerTransactionMikroOrmRepository(orm.em).findByIdempotencyKey(idempotencyKey);
+  return new WagerTransactionMikroOrmRepository(orm.em.fork()).findByIdempotencyKey(idempotencyKey);
 }
 
 async function countLedgerEntries(transactionId: string): Promise<number> {
@@ -311,10 +315,18 @@ describe("ReprocessPendingReferenceUseCase.execute - integração (Postgres real
         const refund = await savePendingReferenceReversal(subject, "REFUND", betExternalId, "20.00", { attempts: 1 });
         await saveProcessedReference(subject, "BET", betExternalId, "20.00");
 
-        // Dois forks independentes do mesmo orm.em, cada um com sua propria conexao/transacao -
-        // mesmo padrao de outbox-message.repository.integration.spec.ts para provar FOR UPDATE
-        // SKIP LOCKED real sob concorrencia de verdade (nao apenas sequencial).
-        await Promise.all([useCaseOn(orm.em.fork()).execute(), useCaseOn(orm.em.fork()).execute()]);
+        // RequestContext.create forka orm.em por chamada (mesmo mecanismo do
+        // PendingReferenceReprocessorScheduler em produção, um ciclo por instância) - os
+        // repositórios de makeUseCase() continuam ligados ao orm.em "global", mas cada
+        // RequestContext.create resolve esse mesmo em para o SEU PRÓPRIO fork via
+        // AsyncLocalStorage, o que dá a cada chamada concorrente sua própria conexão/transação
+        // real para provar FOR UPDATE SKIP LOCKED sob concorrência de verdade (não apenas
+        // sequencial). Um orm.em.fork() passado direto ao construtor do use case não teria esse
+        // mesmo efeito, pois só o em "global" ganha essa resolução automática de contexto.
+        await Promise.all([
+          RequestContext.create(orm.em, () => makeUseCase().execute()),
+          RequestContext.create(orm.em, () => makeUseCase().execute()),
+        ]);
 
         const resolved = await reread(refund.idempotencyKey);
         expect(resolved?.status).toBe("PROCESSED");
