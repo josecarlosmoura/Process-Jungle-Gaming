@@ -7,6 +7,7 @@ import {
   ReceiveMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
+import { RequestContext } from "@mikro-orm/core";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { validateEnv } from "../../infrastructure/config/env.schema";
 import { buildMikroOrmOptions } from "../../infrastructure/database/mikro-orm.config";
@@ -208,5 +209,66 @@ describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack rea
         await deleteRow(id);
       }
     },
+  );
+
+  // Coleta, numa unica passagem limitada (poucas rodadas), quantas vezes cada marcador do
+  // conjunto aparece na fila real - apaga cada ocorrencia encontrada (mesmo raciocinio de
+  // receiveByMarker: mensagem de outro marcador nunca e apagada aqui). Ao contrario de chamar
+  // receiveByMarker duas vezes por linha para "confirmar ausencia" (20 tentativas x 1s cada so
+  // para provar negativo), esta unica varredura ja tabula perda (contagem 0) e duplicacao
+  // (contagem >= 2) ao mesmo tempo, sem esperar um orcamento de tempo multiplicado pelo tamanho
+  // do lote.
+  async function collectDeliveries(markers: ReadonlySet<string>, rounds = 4): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    for (let round = 0; round < rounds; round++) {
+      const response = await sqsClient.send(
+        new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 10, WaitTimeSeconds: 2 }),
+      );
+      for (const sqsMessage of response.Messages ?? []) {
+        const body = JSON.parse(sqsMessage.Body ?? "{}") as Record<string, unknown>;
+        const marker = body.marker as string | undefined;
+        if (marker && markers.has(marker)) {
+          counts.set(marker, (counts.get(marker) ?? 0) + 1);
+          await sqsClient.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: sqsMessage.ReceiptHandle }));
+        }
+      }
+    }
+    return counts;
+  }
+
+  test(
+    "two concurrent PublishOutboxUseCase instances over the same pending batch publish each message exactly once",
+    async () => {
+      const rows = Array.from({ length: 6 }, () => ({
+        id: randomUUID(),
+        aggregateId: randomUUID(),
+        marker: randomUUID(),
+      }));
+      try {
+        await Promise.all(rows.map((row) => insertPendingRow(row.id, row.aggregateId, row.marker)));
+
+        // RequestContext.create forka orm.em por chamada (mesmo mecanismo do
+        // OutboxPublisherScheduler em produção, um ciclo por instância) - dá a cada chamada
+        // concorrente sua própria conexão/transação real, disputando de verdade o mesmo lote
+        // pendente via FOR UPDATE SKIP LOCKED (mesmo padrão de
+        // reprocess-pending-reference.use-case.integration.spec.ts para duas instâncias reais).
+        await Promise.all([
+          RequestContext.create(orm.em, () => makeUseCase().execute()),
+          RequestContext.create(orm.em, () => makeUseCase().execute()),
+        ]);
+
+        for (const row of rows) {
+          expect(await waitForPublishedAt(row.id)).not.toBeNull();
+        }
+
+        const deliveries = await collectDeliveries(new Set(rows.map((row) => row.marker)));
+        for (const row of rows) {
+          expect(deliveries.get(row.marker)).toBe(1);
+        }
+      } finally {
+        await Promise.all(rows.map((row) => deleteRow(row.id)));
+      }
+    },
+    20_000,
   );
 });
