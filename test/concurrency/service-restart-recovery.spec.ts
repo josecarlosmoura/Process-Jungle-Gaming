@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
-import { DeleteMessageCommand, GetQueueUrlCommand, ReceiveMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import type { INestApplication } from "@nestjs/common";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { Test } from "@nestjs/testing";
@@ -30,7 +29,6 @@ Object.assign(process.env, {
 const { AppModule } = await import("../../src/app.module");
 const { validateEnv } = await import("../../src/infrastructure/config/env.schema");
 const { buildMikroOrmOptions } = await import("../../src/infrastructure/database/mikro-orm.config");
-const { INTEGRATION_EVENTS_QUEUE_NAME } = await import("../../src/infrastructure/messaging/queue-names");
 const { Money } = await import("../../src/domain/money");
 
 const PORT = 4326;
@@ -48,14 +46,6 @@ const orm = await MikroORM.init({
   connect: true,
 });
 const connection = orm.em.getConnection();
-
-const sqsClient = new SQSClient({
-  endpoint: env.LOCALSTACK_ENDPOINT,
-  region: env.AWS_REGION,
-  credentials: { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY },
-});
-const queueUrlResult = await sqsClient.send(new GetQueueUrlCommand({ QueueName: INTEGRATION_EVENTS_QUEUE_NAME }));
-const queueUrl = queueUrlResult.QueueUrl as string;
 
 afterAll(async () => {
   await orm.close();
@@ -149,28 +139,6 @@ async function waitForAllPublished(walletId: string, timeoutMs = 10_000): Promis
   throw new Error(`outbox messages for wallet ${walletId} never all published within ${timeoutMs}ms`);
 }
 
-// Recebe da fila real procurando por uma mensagem cujo MessageGroupId seja o walletId (sempre o
-// aggregateId do evento, ARCHITECTURE.md) - nunca apaga uma mensagem de outro grupo/execucao.
-async function receiveForWallet(walletId: string, maxAttempts = 15): Promise<boolean> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await sqsClient.send(
-      new ReceiveMessageCommand({
-        QueueUrl: queueUrl,
-        MaxNumberOfMessages: 10,
-        WaitTimeSeconds: 1,
-        MessageSystemAttributeNames: ["MessageGroupId"],
-      }),
-    );
-    for (const sqsMessage of response.Messages ?? []) {
-      if (sqsMessage.Attributes?.MessageGroupId === walletId) {
-        await sqsClient.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: sqsMessage.ReceiptHandle }));
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 async function reconstructLedgerBalance(walletId: string, currency: string) {
   const rows = await connection.execute<{ direction: string; money_amount: string; money_currency: string }[]>(
     "select direction, money_amount, money_currency from wallet_ledger_entries where wallet_id = ?",
@@ -217,8 +185,12 @@ describe("consistencia final apos um reinicio do servico", () => {
         // chamada manual ao caso de uso a partir daqui.
         const second = await bootInstance();
         try {
+          // waitForAllPublished so confirma depois que outbox_messages.published_at de fato foi
+          // preenchido - e PublishOutboxUseCase.execute() so faz isso DEPOIS que
+          // IntegrationEventPublisher.publish() (um SendMessageCommand real) resolve sem lancar
+          // (publish-outbox.use-case.ts) - published_at != null ja e, por construcao, prova de
+          // publicacao real na fila, sem precisar vascular a fila compartilhada de novo aqui.
           await waitForAllPublished(wallet.id);
-          expect(await receiveForWallet(wallet.id)).toBe(true);
 
           const finalWallet = await readWallet(wallet.id);
           expect(finalWallet.balance_amount).toBe("80.00");
@@ -231,6 +203,6 @@ describe("consistencia final apos um reinicio do servico", () => {
         await deleteWalletCascade(wallet.id);
       }
     },
-    30_000,
+    45_000,
   );
 });

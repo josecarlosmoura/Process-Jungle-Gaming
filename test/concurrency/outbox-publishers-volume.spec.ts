@@ -94,31 +94,36 @@ async function runPublisherLoop(batchSize: number, stop: { requested: boolean })
 }
 
 // Recebe repetidamente da fila real, contando quantas vezes cada marcador do lote aparece -
-// apagando cada ocorrencia encontrada (mesma logica de collectDeliveries em
-// publish-outbox.use-case.integration.spec.ts). Para so depois de algumas rodadas consecutivas sem
-// nenhuma mensagem nova do lote, nunca por um numero fixo de rodadas - uma unica rodada vazia nunca
-// e motivo para desistir (long polling nao garante visibilidade na primeira tentativa).
-async function collectDeliveries(markers: ReadonlySet<string>, maxEmptyRounds = 4): Promise<Map<string, number>> {
+// apagando cada ocorrencia encontrada. Outros arquivos de test/concurrency/ tambem sobem AppModule
+// completo com OutboxPublisherScheduler real sobre esta MESMA fila compartilhada - rodadas
+// "ruidosas" (so com mensagens de outros arquivos, zero dos nossos marcadores) sao esperadas e
+// nunca contam como motivo para desistir. Para so quando (a) todo marcador do lote ja foi visto
+// pelo menos uma vez E algumas rodadas extras de "dreno" (para pegar uma duplicata tardia) ja
+// rodaram, ou (b) o deadline total esgota - nunca por um numero fixo/contador de rodadas vazias
+// consecutivas, que um vizinho barulhento pode disparar antes da hora.
+async function collectDeliveries(markers: ReadonlySet<string>, timeoutMs = 20_000, drainRoundsAfterComplete = 3): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  let emptyRounds = 0;
-  while (emptyRounds < maxEmptyRounds) {
+  const remaining = new Set(markers);
+  const deadline = Date.now() + timeoutMs;
+  let drainRounds = 0;
+  while (Date.now() < deadline && (remaining.size > 0 || drainRounds < drainRoundsAfterComplete)) {
     const response = await sqsClient.send(
       new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 10, WaitTimeSeconds: 2 }),
     );
-    const messages = response.Messages ?? [];
-    let matchedThisRound = 0;
-    for (const sqsMessage of messages) {
+    for (const sqsMessage of response.Messages ?? []) {
       const body = JSON.parse(sqsMessage.Body ?? "{}") as Record<string, unknown>;
       const marker = body.marker as string | undefined;
       if (marker && markers.has(marker)) {
         counts.set(marker, (counts.get(marker) ?? 0) + 1);
-        matchedThisRound += 1;
+        remaining.delete(marker);
         await sqsClient.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: sqsMessage.ReceiptHandle }));
       }
       // mensagem de outro marcador/outra execucao - nunca apagada aqui, continua disponivel para
       // quem a espera de verdade.
     }
-    emptyRounds = matchedThisRound === 0 ? emptyRounds + 1 : 0;
+    if (remaining.size === 0) {
+      drainRounds += 1;
+    }
   }
   return counts;
 }
@@ -169,6 +174,6 @@ describe("dois publishers concorrentes sobre a mesma outbox, em volume (100+ men
         await deleteRows(ids);
       }
     },
-    40_000,
+    60_000,
   );
 });

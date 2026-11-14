@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
-import { MikroORM } from "@mikro-orm/postgresql";
 
 // Este arquivo nunca sobe sua propria instancia da aplicacao (nenhum app.listen() aqui) - ele fala
 // HTTP de verdade com as 3 replicas reais do docker-compose.test.yml (T214), descobertas pela
@@ -8,33 +7,6 @@ import { MikroORM } from "@mikro-orm/postgresql";
 //   docker compose -f docker-compose.test.yml up -d --scale app=3
 // As 3 replicas e este teste compartilham o MESMO Postgres/LocalStack do docker-compose.yml (porta
 // de host 5440/4566, igual aos demais arquivos de test/concurrency/).
-const { validateEnv } = await import("../../src/infrastructure/config/env.schema");
-const { buildMikroOrmOptions } = await import("../../src/infrastructure/database/mikro-orm.config");
-const { Money } = await import("../../src/domain/money");
-
-const env = validateEnv({
-  DB_HOST: "localhost",
-  DB_PORT: "5440",
-  DB_USER: "wagering",
-  DB_PASSWORD: "wagering",
-  DB_NAME: "wagering_test",
-  LOCALSTACK_ENDPOINT: "http://localhost:4566",
-  AWS_REGION: "us-east-1",
-  AWS_ACCESS_KEY_ID: "test",
-  AWS_SECRET_ACCESS_KEY: "test",
-  LEDGER_CURSOR_SECRET: "dev-only-ledger-cursor-secret-not-for-production",
-});
-const orm = await MikroORM.init({
-  ...buildMikroOrmOptions({
-    dbHost: env.DB_HOST,
-    dbPort: env.DB_PORT,
-    dbUser: env.DB_USER,
-    dbPassword: env.DB_PASSWORD,
-    dbName: env.DB_NAME,
-  }),
-  connect: true,
-});
-const connection = orm.em.getConnection();
 
 const REPLICA_COUNT = 3;
 
@@ -67,7 +39,40 @@ function discoverInstancePorts(replicaCount: number): number[] {
   return ports;
 }
 
+// Descoberta das portas ANTES de qualquer conexao ao Postgres/LocalStack ser aberta - se a
+// infraestrutura nao estiver de pe, este arquivo falha aqui, rapido, sem nunca abrir uma pool de
+// conexao que ninguem fecharia depois (o afterAll abaixo so e registrado se o modulo terminar de
+// avaliar; um throw antes dele deixaria uma conexao MikroORM vazando pelo resto da suite).
 const instancePorts = discoverInstancePorts(REPLICA_COUNT);
+
+const { validateEnv } = await import("../../src/infrastructure/config/env.schema");
+const { buildMikroOrmOptions } = await import("../../src/infrastructure/database/mikro-orm.config");
+const { Money } = await import("../../src/domain/money");
+const { MikroORM } = await import("@mikro-orm/postgresql");
+
+const env = validateEnv({
+  DB_HOST: "localhost",
+  DB_PORT: "5440",
+  DB_USER: "wagering",
+  DB_PASSWORD: "wagering",
+  DB_NAME: "wagering_test",
+  LOCALSTACK_ENDPOINT: "http://localhost:4566",
+  AWS_REGION: "us-east-1",
+  AWS_ACCESS_KEY_ID: "test",
+  AWS_SECRET_ACCESS_KEY: "test",
+  LEDGER_CURSOR_SECRET: "dev-only-ledger-cursor-secret-not-for-production",
+});
+const orm = await MikroORM.init({
+  ...buildMikroOrmOptions({
+    dbHost: env.DB_HOST,
+    dbPort: env.DB_PORT,
+    dbUser: env.DB_USER,
+    dbPassword: env.DB_PASSWORD,
+    dbName: env.DB_NAME,
+  }),
+  connect: true,
+});
+const connection = orm.em.getConnection();
 const baseUrls = instancePorts.map((port) => `http://127.0.0.1:${port}`);
 
 afterAll(async () => {

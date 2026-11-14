@@ -241,9 +241,12 @@ describe("REFUND entregue antes do BET referenciado existir", () => {
 
         // Nenhuma chamada manual ao worker daqui - so espera o
         // PendingReferenceReprocessorScheduler, ja em execucao na mesma instancia desde
-        // beforeAll, resolver sozinho dentro do seu proprio ciclo (poll interval reduzido so
-        // para este teste).
-        await waitForStatus(wallet.id, refundExternalId, "PROCESSED");
+        // beforeAll, resolver sozinho dentro do seu proprio ciclo. markPendingReference() fixa o
+        // primeiro nextAttemptAt em now + WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS
+        // (60s, constante de dominio) - reduzir o poll interval do scheduler nunca antecipa isso;
+        // o teste precisa mesmo esperar essa janela real (mesmo valor documentado no README:
+        // "aguarde o nextAttemptAt (1min por padrao)... sleep 65").
+        await waitForStatus(wallet.id, refundExternalId, "PROCESSED", 70_000);
 
         const finalWallet = await readWallet(wallet.id);
         expect(finalWallet.balance_amount).toBe("100.00");
@@ -254,6 +257,6 @@ describe("REFUND entregue antes do BET referenciado existir", () => {
         await deleteWalletCascade(wallet.id);
       }
     },
-    15_000,
+    80_000,
   );
 });

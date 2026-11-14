@@ -155,11 +155,13 @@ function wagerTransactionRequestedBody(messageId: string, walletId: string): str
   });
 }
 
+const INITIAL_WALLET_BALANCE = "1000.00";
+
 describe("worker morto depois do commit e antes do ack (fluxo SQS real)", () => {
   test(
     "a message whose financial effect was committed and confirmed by a direct DB query, but never acked, is redelivered once and resolved as already-processed by a new consumer instance, without duplicating the effect",
     async () => {
-      const walletId = await insertWallet("1000.00");
+      const walletId = await insertWallet(INITIAL_WALLET_BALANCE);
       const businessMessageId = `biz-${randomUUID()}`;
 
       try {
@@ -212,8 +214,15 @@ describe("worker morto depois do commit e antes do ack (fluxo SQS real)", () => 
           expect(await countWhere("wager_transactions", "wallet_id", walletId)).toBe(1);
           expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(1);
 
+          // Esta wallet nasceu por INSERT SQL direto (insertWallet), nunca pelo fluxo real de
+          // POST /wallets - nao existe nenhum lancamento OPENING no ledger para o saldo inicial
+          // semeado. A invariante correta aqui soma esse saldo inicial conhecido ao efeito liquido
+          // reconstruido so dos lancamentos que de fato existem, nao reconstroi a partir de zero.
           const reconstructed = await reconstructLedgerBalance(walletId, finalWallet.currency);
-          expect(reconstructed.toJSON()).toEqual({ amount: finalWallet.balance_amount, currency: finalWallet.currency });
+          const expectedBalance = Money.from({ amount: INITIAL_WALLET_BALANCE, currency: finalWallet.currency }).add(
+            reconstructed,
+          );
+          expect(expectedBalance.toJSON()).toEqual({ amount: finalWallet.balance_amount, currency: finalWallet.currency });
         } finally {
           await secondConsumer.onModuleDestroy();
           await secondModuleRef.close();

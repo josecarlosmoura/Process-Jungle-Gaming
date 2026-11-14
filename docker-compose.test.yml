@@ -20,6 +20,14 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: wagering_test
+      # validateEnv() exige estas mesmo so para resolver a config do CLI de migrations - o CLI
+      # nunca de fato fala com LocalStack/SQS, mas o schema de env e compartilhado com o resto da
+      # aplicacao (src/infrastructure/config/env.schema.ts) e nao tem um subconjunto "so banco".
+      LOCALSTACK_ENDPOINT: http://localstack:4566
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      LEDGER_CURSOR_SECRET: ${LEDGER_CURSOR_SECRET}
     command: ["bun", "run", "migration:up"]
     networks:
       - wagering-net
@@ -47,6 +55,13 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       LEDGER_CURSOR_SECRET: ${LEDGER_CURSOR_SECRET}
+      # Nenhum cenario de test/concurrency/multi-instance.spec.ts depende destes workers (so
+      # exercita HTTP sincrono de wallets/wagering) - intervalos bem mais longos que o default de
+      # producao aqui so reduzem o poll de fundo das 3 replicas contra o mesmo Postgres
+      # compartilhado com o resto da suite, sem afetar nenhuma asserção deste teste.
+      OUTBOX_PUBLISHER_POLL_INTERVAL_MS: "30000"
+      PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS: "30000"
+      DLQ_MONITOR_POLL_INTERVAL_MS: "30000"
     # Porta efemera do host por replica - cada "docker compose ... up --scale app=3" ganha 3 portas
     # de host distintas, descobertas via "docker compose -f docker-compose.test.yml port --index <n>
     # app 3000".
