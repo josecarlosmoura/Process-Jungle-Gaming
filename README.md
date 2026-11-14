@@ -43,6 +43,12 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   - Em qualquer `kind`: replay idempotente por `Idempotency-Key` (inclusive para transações
     rejeitadas e para `PENDING_REFERENCE`), e falha transitória de infraestrutura (`failureCode:
     "INTERNAL_ERROR"`, HTTP `503`) quando o lock da wallet não é obtido em 5s.
+  - Toda transação que chega a `PROCESSED`, é `REJECTED` ou entra em `PENDING_REFERENCE` (e também
+    a `OPENING` gerada por `POST /wallets` com saldo inicial positivo) grava, na mesma transação
+    SQL do efeito principal, uma ou mais linhas em `outbox_messages` (`WagerTransactionProcessed`,
+    `WagerTransactionRejected`, `WalletBalanceChanged` — só quando o saldo de fato muda — e
+    `WagerTransactionPendingReference`). O worker que efetivamente publica essas mensagens no SQS
+    ainda não existe; `published_at` permanece sempre `NULL`.
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
 
 ## Setup local
@@ -109,4 +115,9 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider-a:rollback-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"rollback-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"ROLLBACK","money":{"amount":"50.00","currency":"BRL"},"referenceExternalTransactionId":"win-001"}'
+
+# confere os eventos de integração gravados na outbox para a wallet acima (published_at sempre
+# NULL - o worker de publicação ainda não existe)
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "select event_type, aggregate_id, occurred_at, published_at from outbox_messages where aggregate_id = '<wallet-id>' order by occurred_at;"
 ```

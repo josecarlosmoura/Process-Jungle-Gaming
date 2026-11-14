@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
+import { WagerTransactionProcessed } from "../../domain/events/wager-transaction-processed";
+import { WalletBalanceChanged } from "../../domain/events/wallet-balance-changed";
+import type { EventContext } from "../../domain/integration-event";
 import { Money } from "../../domain/money";
+import { OutboxMessage } from "../../domain/outbox-message";
 import { Wallet, WalletAlreadyExistsError } from "../../domain/wallet";
 import { WagerTransaction } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
+import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
+import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../ports/outbox-message.repository";
 import type { WalletRepository } from "../ports/wallet.repository";
 import { WALLET_REPOSITORY_INTERFACE } from "../ports/wallet.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
@@ -27,6 +33,8 @@ export class CreateWalletUseCase {
     private readonly wagerTransactionRepository: WagerTransactionRepository,
     @Inject(WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE)
     private readonly walletLedgerEntryRepository: WalletLedgerEntryRepository,
+    @Inject(OUTBOX_MESSAGE_REPOSITORY_INTERFACE)
+    private readonly outboxMessageRepository: OutboxMessageRepository,
   ) {}
 
   async execute(command: CreateWalletCommand): Promise<Wallet> {
@@ -60,13 +68,14 @@ export class CreateWalletUseCase {
     await this.walletRepository.save(wallet);
 
     if (command.initialBalance.isPositive()) {
-      await this.openWithInitialBalance(wallet, command.initialBalance);
+      const ctx: EventContext = { correlationId: randomUUID(), occurredAt: new Date() };
+      await this.openWithInitialBalance(wallet, command.initialBalance, ctx);
     }
 
     return wallet;
   }
 
-  private async openWithInitialBalance(wallet: Wallet, initialBalance: Money): Promise<void> {
+  private async openWithInitialBalance(wallet: Wallet, initialBalance: Money, ctx: EventContext): Promise<void> {
     const openingTransaction = WagerTransaction.createOpening({
       id: randomUUID(),
       idempotencyKey: `internal:${wallet.id}`,
@@ -74,7 +83,7 @@ export class CreateWalletUseCase {
       playerId: wallet.playerId,
       money: initialBalance,
     });
-    openingTransaction.markProcessed(undefined, new Date());
+    openingTransaction.markProcessed(undefined, ctx.occurredAt);
     await this.wagerTransactionRepository.save(openingTransaction);
 
     const ledgerEntry = WalletLedgerEntry.create({
@@ -87,5 +96,10 @@ export class CreateWalletUseCase {
       balanceAfter: initialBalance,
     });
     await this.walletLedgerEntryRepository.save(ledgerEntry);
+
+    await this.outboxMessageRepository.save(
+      OutboxMessage.enqueue(WagerTransactionProcessed.from(openingTransaction, wallet.balance.toJSON(), ctx)),
+    );
+    await this.outboxMessageRepository.save(OutboxMessage.enqueue(WalletBalanceChanged.from(wallet, ledgerEntry, ctx)));
   }
 }

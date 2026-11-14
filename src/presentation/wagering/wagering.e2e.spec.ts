@@ -72,9 +72,31 @@ async function deleteWalletCascade(walletId: string | undefined): Promise<void> 
   if (!walletId) {
     return;
   }
+  await connection.execute("delete from outbox_messages where aggregate_id = ?", [walletId]);
   await connection.execute("delete from wallet_ledger_entries where wallet_id = ?", [walletId]);
   await connection.execute("delete from wager_transactions where wallet_id = ?", [walletId]);
   await connection.execute("delete from wallets where id = ?", [walletId]);
+}
+
+async function outboxPayloadsFor(walletId: string, eventType: string): Promise<Record<string, unknown>[]> {
+  const rows = await connection.execute<{ payload: Record<string, unknown> }[]>(
+    "select payload from outbox_messages where aggregate_id = ? and event_type = ? order by occurred_at asc",
+    [walletId, eventType],
+  );
+  return rows.map((row) => row.payload);
+}
+
+// Filtra por transactionId dentro do payload (não só por wallet) - necessário sempre que o
+// cenário tem mais de uma WagerTransaction na mesma wallet (ex.: a BET original que uma
+// REFUND/ROLLBACK/WIN referencia), para a contagem não incluir os eventos da transação referenciada.
+async function outboxEventTypesForTransaction(transactionId: string): Promise<string[]> {
+  const rows = await connection.execute<{ event_type: string }[]>(
+    `select event_type from outbox_messages
+     where payload -> 'data' ->> 'transactionId' = ?
+     order by occurred_at asc, event_type asc`,
+    [transactionId],
+  );
+  return rows.map((row) => row.event_type);
 }
 
 async function countWhere(table: string, column: string, value: string): Promise<number> {
@@ -1837,4 +1859,375 @@ describe("POST /wagering/transactions - lock da wallet não obtido em 5s", () =>
     },
     15_000,
   );
+});
+
+describe("POST /wagering/transactions - outbox: eventos de sucesso que movem saldo", () => {
+  test("BET processed enqueues WagerTransactionProcessed and WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(betPayload(walletId), `provider-a:${randomUUID()}`);
+      expect(status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("WIN without a reference enqueues WagerTransactionProcessed and WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { kind: "WIN", money: { amount: "50.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("WIN with a resolved BET reference enqueues WagerTransactionProcessed and WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      const bet = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: betExternalId, money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const win = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "WIN",
+          money: { amount: "50.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(win.status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(win.body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("REFUND processed enqueues WagerTransactionProcessed and WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      const bet = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: betExternalId, money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const refund = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "REFUND",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(refund.status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(refund.body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("ROLLBACK processed enqueues WagerTransactionProcessed and WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const betExternalId = randomUUID();
+      const bet = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: betExternalId, money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "25.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(rollback.status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(rollback.body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - outbox: LOSS", () => {
+  test("LOSS processed enqueues only WagerTransactionProcessed, never WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { kind: "LOSS", money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(201);
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionProcessed"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - outbox: rejeição por regra de negócio", () => {
+  test("BET rejected for insufficient funds enqueues only WagerTransactionRejected", async () => {
+    const walletId = await insertWallet("20.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(422);
+      expect(body.failureCode).toBe("INSUFFICIENT_FUNDS");
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionRejected"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("LOSS rejected for currency mismatch enqueues only WagerTransactionRejected", async () => {
+    const walletId = await insertWallet("1000.00", "BRL");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { kind: "LOSS", money: { amount: "25.00", currency: "USD" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(422);
+      expect(body.failureCode).toBe("CURRENCY_MISMATCH");
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionRejected"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("WIN rejected for reference mismatch enqueues only WagerTransactionRejected", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, {
+          kind: "WIN",
+          money: { amount: "50.00", currency: "BRL" },
+          referenceExternalTransactionId: randomUUID(),
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(422);
+      expect(body.failureCode).toBe("REFERENCE_MISMATCH");
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionRejected"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("REFUND rejected for reference mismatch enqueues only WagerTransactionRejected", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const winExternalId = randomUUID();
+      const win = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: winExternalId, kind: "WIN", money: { amount: "10.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(win.status).toBe(201);
+
+      // REFUND só aceita referenciar uma BET - referenciar a WIN acima é tão inválido quanto uma
+      // referência divergente (ARCHITECTURE.md seção 9).
+      const refund = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "REFUND",
+          money: { amount: "10.00", currency: "BRL" },
+          referenceExternalTransactionId: winExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(refund.status).toBe(422);
+      expect(refund.body.failureCode).toBe("REFERENCE_MISMATCH");
+
+      const types = await outboxEventTypesForTransaction(refund.body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionRejected"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("ROLLBACK rejected for reversal would cause negative balance enqueues only WagerTransactionRejected", async () => {
+    const walletId = await insertWallet("10.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    try {
+      const winExternalId = randomUUID();
+      const win = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, externalTransactionId: winExternalId, kind: "WIN", money: { amount: "50.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(win.status).toBe(201);
+
+      const bet = await postBet(
+        betPayload(walletId, { providerId, playerId, roundId, money: { amount: "55.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "50.00", currency: "BRL" },
+          referenceExternalTransactionId: winExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(rollback.status).toBe(422);
+      expect(rollback.body.failureCode).toBe("REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE");
+
+      const types = await outboxEventTypesForTransaction(rollback.body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionRejected"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - outbox: PENDING_REFERENCE", () => {
+  test("REFUND with a missing reference enqueues exactly one WagerTransactionPendingReference matching attempts and nextAttemptAt", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { kind: "REFUND", money: { amount: "25.00", currency: "BRL" }, referenceExternalTransactionId: randomUUID() }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(202);
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionPendingReference"]);
+
+      const metadata = await pendingReferenceMetadataFor(body.transactionId as string);
+      const [payload] = await outboxPayloadsFor(walletId, "WagerTransactionPendingReference");
+      const data = payload?.data as { attempts: number; nextAttemptAt: string };
+      expect(data.attempts).toBe(metadata.attempts);
+      expect(new Date(data.nextAttemptAt)).toEqual(metadata.nextAttemptAt);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("ROLLBACK with a missing reference enqueues exactly one WagerTransactionPendingReference matching attempts and nextAttemptAt", async () => {
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(
+        betPayload(walletId, { kind: "ROLLBACK", money: { amount: "25.00", currency: "BRL" }, referenceExternalTransactionId: randomUUID() }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(status).toBe(202);
+
+      const types = await outboxEventTypesForTransaction(body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionPendingReference"]);
+
+      const metadata = await pendingReferenceMetadataFor(body.transactionId as string);
+      const [payload] = await outboxPayloadsFor(walletId, "WagerTransactionPendingReference");
+      const data = payload?.data as { attempts: number; nextAttemptAt: string };
+      expect(data.attempts).toBe(metadata.attempts);
+      expect(new Date(data.nextAttemptAt)).toEqual(metadata.nextAttemptAt);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - outbox: replay nunca duplica um evento", () => {
+  test("repeating the Idempotency-Key while PENDING_REFERENCE does not enqueue a second WagerTransactionPendingReference", async () => {
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const refundPayload = betPayload(walletId, {
+      kind: "REFUND",
+      money: { amount: "25.00", currency: "BRL" },
+      referenceExternalTransactionId: randomUUID(),
+    });
+    try {
+      const first = await postBet(refundPayload, idempotencyKey);
+      expect(first.status).toBe(202);
+
+      const replay = await postBet(refundPayload, idempotencyKey);
+      expect(replay.status).toBe(202);
+      expect(replay.body.idempotentReplay).toBe(true);
+
+      const types = await outboxEventTypesForTransaction(first.body.transactionId as string);
+      expect(types).toEqual(["WagerTransactionPendingReference"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("replaying an already PROCESSED BET does not enqueue a second WagerTransactionProcessed or WalletBalanceChanged", async () => {
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const payload = betPayload(walletId, { money: { amount: "25.00", currency: "BRL" } });
+    try {
+      const first = await postBet(payload, idempotencyKey);
+      expect(first.status).toBe(201);
+
+      const replay = await postBet(payload, idempotencyKey);
+      expect(replay.status).toBe(200);
+      expect(replay.body.idempotentReplay).toBe(true);
+
+      const types = await outboxEventTypesForTransaction(first.body.transactionId as string);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
 });

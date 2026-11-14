@@ -87,9 +87,18 @@ async function deleteWalletCascade(walletId: string | undefined): Promise<void> 
   if (!walletId) {
     return;
   }
+  await connection.execute("delete from outbox_messages where aggregate_id = ?", [walletId]);
   await connection.execute("delete from wallet_ledger_entries where wallet_id = ?", [walletId]);
   await connection.execute("delete from wager_transactions where wallet_id = ?", [walletId]);
   await connection.execute("delete from wallets where id = ?", [walletId]);
+}
+
+async function outboxEventTypesFor(walletId: string): Promise<string[]> {
+  const rows = await connection.execute<{ event_type: string }[]>(
+    "select event_type from outbox_messages where aggregate_id = ? order by occurred_at asc, event_type asc",
+    [walletId],
+  );
+  return rows.map((row) => row.event_type);
 }
 
 async function countWhere(table: string, column: string, value: string): Promise<number> {
@@ -305,6 +314,33 @@ describe("Contrato de resposta", () => {
       expect(Object.keys(fetched.body.balance).sort()).toEqual(["amount", "currency"]);
     } finally {
       await deleteWalletCascade(created.body.id);
+    }
+  });
+});
+
+describe("POST /wallets - outbox", () => {
+  test("POST /wallets with a positive initialBalance enqueues WagerTransactionProcessed and WalletBalanceChanged for the OPENING transaction", async () => {
+    const playerId = randomUUID();
+    const { status, body } = await postWallet({ playerId, initialBalance: { amount: "1000.00", currency: "BRL" } });
+
+    try {
+      expect(status).toBe(201);
+      const types = await outboxEventTypesFor(body.id);
+      expect(types.sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+    } finally {
+      await deleteWalletCascade(body.id);
+    }
+  });
+
+  test("POST /wallets with a zero initialBalance enqueues nothing", async () => {
+    const playerId = randomUUID();
+    const { status, body } = await postWallet({ playerId, initialBalance: { amount: "0.00", currency: "BRL" } });
+
+    try {
+      expect(status).toBe(201);
+      expect(await outboxEventTypesFor(body.id)).toEqual([]);
+    } finally {
+      await deleteWalletCascade(body.id);
     }
   });
 });

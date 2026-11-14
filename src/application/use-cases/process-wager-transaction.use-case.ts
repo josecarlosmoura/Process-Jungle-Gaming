@@ -1,15 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { PayloadValidationError, ResourceConflictError, TransientInfrastructureError } from "../../domain/domain-error";
+import { WagerTransactionPendingReference } from "../../domain/events/wager-transaction-pending-reference";
+import { WagerTransactionProcessed } from "../../domain/events/wager-transaction-processed";
+import { WagerTransactionRejected } from "../../domain/events/wager-transaction-rejected";
+import { WalletBalanceChanged } from "../../domain/events/wallet-balance-changed";
 import type { FailureCode } from "../../domain/failure-code";
+import type { EventContext, IntegrationEvent } from "../../domain/integration-event";
 import { CurrencyMismatchError, type Money, type MoneyProps } from "../../domain/money";
+import { OutboxMessage } from "../../domain/outbox-message";
 import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ReferenceResolver } from "../reference-resolver";
+import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
+import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../ports/outbox-message.repository";
 import type { WalletRepository } from "../ports/wallet.repository";
 import { WALLET_REPOSITORY_INTERFACE } from "../ports/wallet.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
@@ -72,8 +80,6 @@ const ROLLBACK_REFERENCEABLE_KINDS: ReadonlySet<WagerTransactionKind> = new Set(
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
-  private readonly logger = new Logger(ProcessWagerTransactionUseCase.name);
-
   constructor(
     private readonly em: EntityManager,
     @Inject(WALLET_REPOSITORY_INTERFACE) private readonly walletRepository: WalletRepository,
@@ -81,6 +87,8 @@ export class ProcessWagerTransactionUseCase {
     private readonly wagerTransactionRepository: WagerTransactionRepository,
     @Inject(WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE)
     private readonly walletLedgerEntryRepository: WalletLedgerEntryRepository,
+    @Inject(OUTBOX_MESSAGE_REPOSITORY_INTERFACE)
+    private readonly outboxMessageRepository: OutboxMessageRepository,
     private readonly referenceResolver: ReferenceResolver,
   ) {}
 
@@ -138,6 +146,11 @@ export class ProcessWagerTransactionUseCase {
       throw new WalletNotFoundError(command.walletId);
     }
 
+    // Um correlationId novo por chamada - nem este caso de uso nem o worker de entrada (HTTP hoje,
+    // SQS em T210) ainda propagam um id de correlação de borda, então gerar aqui é o único ponto
+    // de entrada disponível (ARCHITECTURE.md secao 12 cobre a propagação real como trabalho futuro).
+    const ctx: EventContext = { correlationId: randomUUID(), occurredAt: new Date() };
+
     const transaction = WagerTransaction.create({
       id: randomUUID(),
       providerId: command.providerId,
@@ -154,15 +167,15 @@ export class ProcessWagerTransactionUseCase {
     });
 
     if (!transaction.affectsBalance()) {
-      return this.processWithoutBalanceEffect(transaction, wallet);
+      return this.processWithoutBalanceEffect(transaction, wallet, ctx);
     }
     if (transaction.kind === "REFUND") {
-      return this.processRefund(transaction, wallet, command);
+      return this.processRefund(transaction, wallet, command, ctx);
     }
     if (transaction.kind === "ROLLBACK") {
-      return this.processRollback(transaction, wallet, command);
+      return this.processRollback(transaction, wallet, command, ctx);
     }
-    return this.processWithBalanceEffect(transaction, wallet, command);
+    return this.processWithBalanceEffect(transaction, wallet, command, ctx);
   }
 
   // LOSS nunca chama wallet.credit/debit, entao a consistencia de moeda (garantida de graca para
@@ -171,10 +184,10 @@ export class ProcessWagerTransactionUseCase {
   private async processWithoutBalanceEffect(
     transaction: WagerTransaction,
     wallet: Wallet,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
     if (!wallet.hasCurrency(transaction.money.currency)) {
-      transaction.reject("CURRENCY_MISMATCH");
-      await this.wagerTransactionRepository.save(transaction);
+      await this.rejectTransaction(transaction, "CURRENCY_MISMATCH", ctx);
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -188,8 +201,11 @@ export class ProcessWagerTransactionUseCase {
     // e a unica outra fonte de "saldo congelado naquele momento" que toReplayResult usa para
     // BET/WIN - sem isso, um replay depois de outra transacao mover o saldo devolveria o saldo
     // atual (errado), nao o observado originalmente.
-    transaction.markProcessed(undefined, new Date(), wallet.balance);
+    transaction.markProcessed(undefined, ctx.occurredAt, wallet.balance);
     await this.wagerTransactionRepository.save(transaction);
+    // LOSS nunca move saldo (RN-50): so WagerTransactionProcessed, nunca WalletBalanceChanged -
+    // o gatilho mais facil de implementar errado "copiando o padrao de BET".
+    await this.enqueue(WagerTransactionProcessed.from(transaction, wallet.balance.toJSON(), ctx));
     return {
       transactionId: transaction.id,
       status: transaction.status,
@@ -202,6 +218,7 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
     wallet: Wallet,
     command: ProcessWagerTransactionCommand,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
     let referenceTransactionId: string | undefined;
     if (transaction.kind === "WIN" && command.referenceExternalTransactionId) {
@@ -218,8 +235,7 @@ export class ProcessWagerTransactionUseCase {
       // ignorando a referencia em silencio. Essa checagem de "kind aceitavel" e responsabilidade
       // de quem chama, nao do ReferenceResolver (REFUND/ROLLBACK aceitam outros kinds).
       if (resolution.outcome !== "RESOLVED" || resolution.reference.kind !== "BET") {
-        transaction.reject("REFERENCE_MISMATCH");
-        await this.wagerTransactionRepository.save(transaction);
+        await this.rejectTransaction(transaction, "REFERENCE_MISMATCH", ctx);
         return {
           transactionId: transaction.id,
           status: transaction.status,
@@ -239,14 +255,15 @@ export class ProcessWagerTransactionUseCase {
         wallet.credit(command.money);
       }
     } catch (error) {
+      let code: FailureCode;
       if (error instanceof CurrencyMismatchError) {
-        transaction.reject("CURRENCY_MISMATCH");
+        code = "CURRENCY_MISMATCH";
       } else if (error instanceof InsufficientFundsError) {
-        transaction.reject("INSUFFICIENT_FUNDS");
+        code = "INSUFFICIENT_FUNDS";
       } else {
         throw error;
       }
-      await this.wagerTransactionRepository.save(transaction);
+      await this.rejectTransaction(transaction, code, ctx);
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -256,7 +273,7 @@ export class ProcessWagerTransactionUseCase {
       };
     }
 
-    transaction.markProcessed(referenceTransactionId, new Date());
+    transaction.markProcessed(referenceTransactionId, ctx.occurredAt);
     const ledgerEntry = WalletLedgerEntry.create({
       id: randomUUID(),
       walletId: wallet.id,
@@ -269,9 +286,12 @@ export class ProcessWagerTransactionUseCase {
 
     await this.wagerTransactionRepository.save(transaction);
     await this.walletLedgerEntryRepository.save(ledgerEntry);
+    await this.enqueue(WagerTransactionProcessed.from(transaction, wallet.balance.toJSON(), ctx));
+    await this.enqueue(WalletBalanceChanged.from(wallet, ledgerEntry, ctx));
+    // walletRepository.save fica depois do enqueue de proposito: o teste de atomicidade (S6)
+    // forca a falha nesse ultimo passo e prova que tudo antes dele - inclusive o insert da
+    // outbox - e desfeito junto pela mesma transacao SQL.
     await this.walletRepository.save(wallet);
-    // outbox.enqueue(WagerTransactionProcessed, WalletBalanceChanged, ...) entraria aqui, na
-    // mesma transacao, quando a outbox existir.
 
     return {
       transactionId: transaction.id,
@@ -285,6 +305,7 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
     wallet: Wallet,
     command: ProcessWagerTransactionCommand,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
     // WagerTransaction.create() ja exige referenceExternalTransactionId para "REFUND", e o zod do
     // controller rejeita a ausencia como INVALID_PAYLOAD antes de chegar aqui - garantido presente.
@@ -302,9 +323,9 @@ export class ProcessWagerTransactionUseCase {
       // A referencia obrigatoria de um REFUND ainda pode se resolver depois (worker de
       // reprocessamento), entao nunca rejeita de imediato so por ainda nao existir - diferente da
       // referencia opcional de WIN, que rejeita qualquer outcome que nao seja RESOLVED.
-      transaction.markPendingReference(new Date());
+      transaction.markPendingReference(ctx.occurredAt);
       await this.wagerTransactionRepository.save(transaction);
-      this.publishPendingReferenceStub(transaction);
+      await this.enqueue(WagerTransactionPendingReference.from(transaction, ctx));
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -313,24 +334,24 @@ export class ProcessWagerTransactionUseCase {
       };
     }
     if (resolution.outcome === "UNRESOLVABLE") {
-      return this.rejectRefund(transaction, wallet, "REFERENCE_NOT_FOUND");
+      return this.rejectRefund(transaction, wallet, "REFERENCE_NOT_FOUND", ctx);
     }
     if (resolution.outcome === "ALREADY_REVERSED") {
-      return this.rejectRefund(transaction, wallet, "REFERENCE_ALREADY_REVERSED");
+      return this.rejectRefund(transaction, wallet, "REFERENCE_ALREADY_REVERSED", ctx);
     }
     // REFUND so reverte uma BET - qualquer outro kind resolvido e tao invalido quanto uma
     // referencia divergente nos 5 campos, pelo mesmo failureCode (ARCHITECTURE.md secao 9: "um
     // tipo/estado que a operacao que a referencia nao aceita"). Essa checagem de kind e
     // responsabilidade de quem chama, nao do ReferenceResolver (ROLLBACK aceita outros kinds).
     if (resolution.outcome !== "RESOLVED" || resolution.reference.kind !== "BET") {
-      return this.rejectRefund(transaction, wallet, "REFERENCE_MISMATCH");
+      return this.rejectRefund(transaction, wallet, "REFERENCE_MISMATCH", ctx);
     }
 
     const reference = resolution.reference;
     // Reversao parcial esta fora de escopo - o valor precisa ser exatamente o da BET original
     // (nao so a mesma moeda, ja garantida pelo ReferenceResolver).
     if (!command.money.equals(reference.money)) {
-      return this.rejectRefund(transaction, wallet, "REFERENCE_AMOUNT_MISMATCH");
+      return this.rejectRefund(transaction, wallet, "REFERENCE_AMOUNT_MISMATCH", ctx);
     }
 
     const balanceBefore = wallet.balance;
@@ -338,12 +359,12 @@ export class ProcessWagerTransactionUseCase {
       wallet.credit(command.money);
     } catch (error) {
       if (error instanceof CurrencyMismatchError) {
-        return this.rejectRefund(transaction, wallet, "CURRENCY_MISMATCH");
+        return this.rejectRefund(transaction, wallet, "CURRENCY_MISMATCH", ctx);
       }
       throw error;
     }
 
-    transaction.markProcessed(reference.id, new Date());
+    transaction.markProcessed(reference.id, ctx.occurredAt);
     const ledgerEntry = WalletLedgerEntry.create({
       id: randomUUID(),
       walletId: wallet.id,
@@ -356,6 +377,8 @@ export class ProcessWagerTransactionUseCase {
 
     await this.wagerTransactionRepository.save(transaction);
     await this.walletLedgerEntryRepository.save(ledgerEntry);
+    await this.enqueue(WagerTransactionProcessed.from(transaction, wallet.balance.toJSON(), ctx));
+    await this.enqueue(WalletBalanceChanged.from(wallet, ledgerEntry, ctx));
     await this.walletRepository.save(wallet);
 
     return {
@@ -370,9 +393,9 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
     wallet: Wallet,
     code: FailureCode,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
-    transaction.reject(code);
-    await this.wagerTransactionRepository.save(transaction);
+    await this.rejectTransaction(transaction, code, ctx);
     return {
       transactionId: transaction.id,
       status: transaction.status,
@@ -386,6 +409,7 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
     wallet: Wallet,
     command: ProcessWagerTransactionCommand,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
     // WagerTransaction.create() ja exige referenceExternalTransactionId para "ROLLBACK", e o zod
     // do controller rejeita a ausencia como INVALID_PAYLOAD antes de chegar aqui - garantido presente.
@@ -402,9 +426,9 @@ export class ProcessWagerTransactionUseCase {
     if (resolution.outcome === "NOT_FOUND") {
       // Mesmo caminho de REFUND: a referencia obrigatoria ainda pode se resolver depois (worker
       // de reprocessamento), nunca rejeita de imediato so por ainda nao existir.
-      transaction.markPendingReference(new Date());
+      transaction.markPendingReference(ctx.occurredAt);
       await this.wagerTransactionRepository.save(transaction);
-      this.publishPendingReferenceStub(transaction);
+      await this.enqueue(WagerTransactionPendingReference.from(transaction, ctx));
       return {
         transactionId: transaction.id,
         status: transaction.status,
@@ -413,23 +437,23 @@ export class ProcessWagerTransactionUseCase {
       };
     }
     if (resolution.outcome === "UNRESOLVABLE") {
-      return this.rejectRollback(transaction, wallet, "REFERENCE_NOT_FOUND");
+      return this.rejectRollback(transaction, wallet, "REFERENCE_NOT_FOUND", ctx);
     }
     if (resolution.outcome === "ALREADY_REVERSED") {
-      return this.rejectRollback(transaction, wallet, "REFERENCE_ALREADY_REVERSED");
+      return this.rejectRollback(transaction, wallet, "REFERENCE_ALREADY_REVERSED", ctx);
     }
     // ROLLBACK reverte BET, WIN ou REFUND (RN-26) - nunca LOSS (nao afeta saldo, nao ha o que
     // desfazer) nem outro ROLLBACK. Essa checagem de kind e responsabilidade de quem chama, nao
     // do ReferenceResolver (cada operacao aceita um conjunto diferente de kinds referenciaveis).
     if (resolution.outcome !== "RESOLVED" || !ROLLBACK_REFERENCEABLE_KINDS.has(resolution.reference.kind)) {
-      return this.rejectRollback(transaction, wallet, "REFERENCE_MISMATCH");
+      return this.rejectRollback(transaction, wallet, "REFERENCE_MISMATCH", ctx);
     }
 
     const reference = resolution.reference;
     // Reversao parcial esta fora de escopo - o valor precisa ser exatamente o da referencia
     // original (nao so a mesma moeda, ja garantida pelo ReferenceResolver).
     if (!command.money.equals(reference.money)) {
-      return this.rejectRollback(transaction, wallet, "REFERENCE_AMOUNT_MISMATCH");
+      return this.rejectRollback(transaction, wallet, "REFERENCE_AMOUNT_MISMATCH", ctx);
     }
 
     const direction = transaction.ledgerDirectionFor(reference);
@@ -442,18 +466,18 @@ export class ProcessWagerTransactionUseCase {
       }
     } catch (error) {
       if (error instanceof CurrencyMismatchError) {
-        return this.rejectRollback(transaction, wallet, "CURRENCY_MISMATCH");
+        return this.rejectRollback(transaction, wallet, "CURRENCY_MISMATCH", ctx);
       }
       if (error instanceof InsufficientFundsError) {
         // Caminho de codigo distinto do de uma BET sem saldo (processWithBalanceEffect) - RN-35
         // exige um failureCode proprio para "a reversao levaria o saldo a negativo", nunca
         // confundido com "aposta legitima sem fundos".
-        return this.rejectRollback(transaction, wallet, "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE");
+        return this.rejectRollback(transaction, wallet, "REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE", ctx);
       }
       throw error;
     }
 
-    transaction.markProcessed(reference.id, new Date());
+    transaction.markProcessed(reference.id, ctx.occurredAt);
     const ledgerEntry = WalletLedgerEntry.create({
       id: randomUUID(),
       walletId: wallet.id,
@@ -466,6 +490,8 @@ export class ProcessWagerTransactionUseCase {
 
     await this.wagerTransactionRepository.save(transaction);
     await this.walletLedgerEntryRepository.save(ledgerEntry);
+    await this.enqueue(WagerTransactionProcessed.from(transaction, wallet.balance.toJSON(), ctx));
+    await this.enqueue(WalletBalanceChanged.from(wallet, ledgerEntry, ctx));
     await this.walletRepository.save(wallet);
 
     return {
@@ -480,9 +506,9 @@ export class ProcessWagerTransactionUseCase {
     transaction: WagerTransaction,
     wallet: Wallet,
     code: FailureCode,
+    ctx: EventContext,
   ): Promise<ProcessWagerTransactionResult> {
-    transaction.reject(code);
-    await this.wagerTransactionRepository.save(transaction);
+    await this.rejectTransaction(transaction, code, ctx);
     return {
       transactionId: transaction.id,
       status: transaction.status,
@@ -492,21 +518,14 @@ export class ProcessWagerTransactionUseCase {
     };
   }
 
-  // TODO: stub de publicacao do evento WagerTransactionPendingReference - a outbox real
-  // (insercao de outbox_message na mesma transacao SQL) ainda nao existe neste codebase; ate
-  // la, um log estruturado marca o ponto de extensao a substituir quando a outbox for
-  // implementada. Chamado so no caminho que de fato transiciona para PENDING_REFERENCE pela
-  // primeira vez (nunca no replay, que nao chama markPendingReference de novo), entao nunca
-  // duplica a "publicacao" para a mesma transacao.
-  private publishPendingReferenceStub(transaction: WagerTransaction): void {
-    this.logger.log({
-      event: "WagerTransactionPendingReference",
-      transactionId: transaction.id,
-      walletId: transaction.walletId,
-      kind: transaction.kind,
-      attempts: transaction.attempts,
-      nextAttemptAt: transaction.nextAttemptAt,
-    });
+  private async rejectTransaction(transaction: WagerTransaction, code: FailureCode, ctx: EventContext): Promise<void> {
+    transaction.reject(code);
+    await this.wagerTransactionRepository.save(transaction);
+    await this.enqueue(WagerTransactionRejected.from(transaction, ctx));
+  }
+
+  private async enqueue(event: IntegrationEvent<unknown>): Promise<void> {
+    await this.outboxMessageRepository.save(OutboxMessage.enqueue(event));
   }
 
   // A mesma Idempotency-Key com o mesmo payloadHash e replay (devolve o resultado original, sem

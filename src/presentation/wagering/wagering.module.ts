@@ -7,9 +7,11 @@ import { DomainErrorHandlingModule } from "../common/domain-error-handling.modul
 import { WalletMikroOrmRepository } from "../../infrastructure/persistence/wallet.repository";
 import { WagerTransactionMikroOrmRepository } from "../../infrastructure/persistence/wager-transaction.repository";
 import { WalletLedgerEntryMikroOrmRepository } from "../../infrastructure/persistence/wallet-ledger-entry.repository";
+import { OutboxMessageMikroOrmRepository } from "../../infrastructure/persistence/outbox-message.repository";
 import { WALLET_REPOSITORY_INTERFACE } from "../../application/ports/wallet.repository";
 import { WAGER_TRANSACTION_REPOSITORY_INTERFACE } from "../../application/ports/wager-transaction.repository";
 import { WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE } from "../../application/ports/wallet-ledger-entry.repository";
+import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../../application/ports/outbox-message.repository";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
 import { ReferenceResolver } from "../../application/reference-resolver";
 import { WageringController } from "./wagering.controller";
@@ -26,6 +28,7 @@ import { WageringController } from "./wagering.controller";
         new WalletLedgerEntryMikroOrmRepository(em, config.ledgerCursorSecret),
       inject: [EntityManager, AppConfigService],
     },
+    { provide: OUTBOX_MESSAGE_REPOSITORY_INTERFACE, useClass: OutboxMessageMikroOrmRepository },
     ReferenceResolver,
     ProcessWagerTransactionUseCase,
   ],
