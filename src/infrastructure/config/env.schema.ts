@@ -27,6 +27,8 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LEDGER_CURSOR_SECRET: z.string().min(1),
+  OUTBOX_PUBLISHER_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2000),
+  OUTBOX_PUBLISHER_BATCH_SIZE: z.coerce.number().int().min(1).default(20),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

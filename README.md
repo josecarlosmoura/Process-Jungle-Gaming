@@ -47,8 +47,14 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     a `OPENING` gerada por `POST /wallets` com saldo inicial positivo) grava, na mesma transação
     SQL do efeito principal, uma ou mais linhas em `outbox_messages` (`WagerTransactionProcessed`,
     `WagerTransactionRejected`, `WalletBalanceChanged` — só quando o saldo de fato muda — e
-    `WagerTransactionPendingReference`). O worker que efetivamente publica essas mensagens no SQS
-    ainda não existe; `published_at` permanece sempre `NULL`.
+    `WagerTransactionPendingReference`).
+- **Outbox Publisher Worker** — roda em toda instância da aplicação (sem eleição de líder),
+  reivindicando mensagens pendentes de `outbox_messages` via `FOR UPDATE SKIP LOCKED` e publicando
+  cada uma na fila SQS `integration-events.fifo` (`MessageGroupId` = `aggregateId`,
+  `MessageDeduplicationId` = `id` da mensagem). Sucesso grava `published_at`; falha agenda retry
+  com backoff exponencial + jitter (`attempts`/`next_attempt_at`), sem limite de tentativas e sem
+  derrubar o worker. Intervalo de polling e tamanho do lote configuráveis via
+  `OUTBOX_PUBLISHER_POLL_INTERVAL_MS`/`OUTBOX_PUBLISHER_BATCH_SIZE` (defaults `2000`/`20`).
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
 
 ## Setup local
@@ -116,8 +122,14 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Idempotency-Key: provider-a:rollback-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"rollback-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"ROLLBACK","money":{"amount":"50.00","currency":"BRL"},"referenceExternalTransactionId":"win-001"}'
 
-# confere os eventos de integração gravados na outbox para a wallet acima (published_at sempre
-# NULL - o worker de publicação ainda não existe)
+# confere os eventos de integração gravados na outbox para a wallet acima - published_at e
+# preenchido em ate um ciclo de polling (OUTBOX_PUBLISHER_POLL_INTERVAL_MS, default 2s) pelo
+# Outbox Publisher Worker, que roda em background na propria aplicacao
 docker compose exec postgres psql -U wagering -d wagering_dev -c \
   "select event_type, aggregate_id, occurred_at, published_at from outbox_messages where aggregate_id = '<wallet-id>' order by occurred_at;"
+
+# confere a mensagem publicada de fato no SQS (integration-events.fifo)
+aws --endpoint-url=http://localhost:4566 sqs receive-message \
+  --queue-url "$(aws --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name integration-events.fifo --query QueueUrl --output text)" \
+  --attribute-names All
 ```

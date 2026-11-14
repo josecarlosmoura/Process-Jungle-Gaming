@@ -6,7 +6,7 @@ import {
   SetQueueAttributesCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
-import { WAGER_TRANSACTIONS_DLQ_NAME, WAGER_TRANSACTIONS_QUEUE_NAME } from "./queue-names";
+import { INTEGRATION_EVENTS_QUEUE_NAME, WAGER_TRANSACTIONS_DLQ_NAME, WAGER_TRANSACTIONS_QUEUE_NAME } from "./queue-names";
 
 const client = new SQSClient({
   endpoint: "http://localhost:4566",
@@ -105,6 +105,23 @@ describe("queue provisioning", () => {
       );
 
       expect(attributes.Attributes?.VisibilityTimeout).toBe("30");
+    },
+    SCRIPT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "provisioning the queues makes integration-events.fifo listable via ListQueues as a FIFO queue",
+    async () => {
+      runSetupScript();
+
+      const count = await countQueuesNamed(INTEGRATION_EVENTS_QUEUE_NAME);
+      expect(count).toBe(1);
+
+      const url = await client.send(new GetQueueUrlCommand({ QueueName: INTEGRATION_EVENTS_QUEUE_NAME }));
+      const attributes = await client.send(
+        new GetQueueAttributesCommand({ QueueUrl: url.QueueUrl, AttributeNames: ["FifoQueue"] }),
+      );
+      expect(attributes.Attributes?.FifoQueue).toBe("true");
     },
     SCRIPT_TEST_TIMEOUT_MS,
   );

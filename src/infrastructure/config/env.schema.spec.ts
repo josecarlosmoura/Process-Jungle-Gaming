@@ -38,4 +38,18 @@ describe("validateEnv", () => {
     const env = { ...validEnv, PATH: "/usr/bin", SOME_RANDOM_OS_VAR: "whatever" };
     expect(() => validateEnv(env)).not.toThrow();
   });
+
+  test("defaults OUTBOX_PUBLISHER_POLL_INTERVAL_MS to 2000 and OUTBOX_PUBLISHER_BATCH_SIZE to 20, and accepts an override for each", () => {
+    const defaults = validateEnv(validEnv);
+    expect(defaults.OUTBOX_PUBLISHER_POLL_INTERVAL_MS).toBe(2000);
+    expect(defaults.OUTBOX_PUBLISHER_BATCH_SIZE).toBe(20);
+
+    const overridden = validateEnv({
+      ...validEnv,
+      OUTBOX_PUBLISHER_POLL_INTERVAL_MS: "500",
+      OUTBOX_PUBLISHER_BATCH_SIZE: "5",
+    });
+    expect(overridden.OUTBOX_PUBLISHER_POLL_INTERVAL_MS).toBe(500);
+    expect(overridden.OUTBOX_PUBLISHER_BATCH_SIZE).toBe(5);
+  });
 });

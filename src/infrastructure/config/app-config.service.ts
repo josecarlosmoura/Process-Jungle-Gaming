@@ -54,4 +54,12 @@ export class AppConfigService {
   get ledgerCursorSecret(): string {
     return this.configService.get("LEDGER_CURSOR_SECRET", { infer: true });
   }
+
+  get outboxPublisherPollIntervalMs(): number {
+    return this.configService.get("OUTBOX_PUBLISHER_POLL_INTERVAL_MS", { infer: true });
+  }
+
+  get outboxPublisherBatchSize(): number {
+    return this.configService.get("OUTBOX_PUBLISHER_BATCH_SIZE", { infer: true });
+  }
 }

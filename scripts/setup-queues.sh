@@ -5,6 +5,7 @@ ENDPOINT_URL="${SQS_ENDPOINT_URL:-http://localhost:4566}"
 REGION="${AWS_REGION:-us-east-1}"
 MAIN_QUEUE_NAME="wager-transactions.fifo"
 DLQ_NAME="wager-transactions-dlq.fifo"
+INTEGRATION_EVENTS_QUEUE_NAME="integration-events.fifo"
 VISIBILITY_TIMEOUT_SECONDS=30
 # Valor provisorio: a politica final de retry/backoff da DLQ e escolhida e justificada numa
 # tarefa futura dedicada a isso. Aqui so precisa existir a associacao de redrive policy.
@@ -54,5 +55,12 @@ redrive_policy_escaped=${redrive_policy//\"/\\\"}
 main_attributes="{\"FifoQueue\":\"true\",\"VisibilityTimeout\":\"${VISIBILITY_TIMEOUT_SECONDS}\",\"RedrivePolicy\":\"${redrive_policy_escaped}\"}"
 main_url=$(create_or_update_queue "$MAIN_QUEUE_NAME" "$main_attributes")
 
-echo "DLQ:         $dlq_url"
-echo "Main queue:  $main_url"
+# Fila de saida do Outbox Publisher Worker (T209) - sem DLQ propria na especificacao; cada
+# mensagem publicada ja traz MessageDeduplicationId explicito, nunca depende de
+# ContentBasedDeduplication.
+integration_events_attributes="{\"FifoQueue\":\"true\",\"VisibilityTimeout\":\"${VISIBILITY_TIMEOUT_SECONDS}\"}"
+integration_events_url=$(create_or_update_queue "$INTEGRATION_EVENTS_QUEUE_NAME" "$integration_events_attributes")
+
+echo "DLQ:               $dlq_url"
+echo "Main queue:         $main_url"
+echo "Integration events: $integration_events_url"

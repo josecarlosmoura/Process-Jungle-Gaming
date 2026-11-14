@@ -1,5 +1,12 @@
 import type { IntegrationEvent } from "./integration-event";
 
+export class OutboxMessageAlreadyPublishedError extends Error {
+  constructor(id: string) {
+    super(`OutboxMessage "${id}" was already published`);
+    this.name = "OutboxMessageAlreadyPublishedError";
+  }
+}
+
 export interface OutboxMessageState {
   id: string;
   aggregateId: string;
@@ -12,6 +19,15 @@ export interface OutboxMessageState {
 }
 
 export class OutboxMessage {
+  // ARCHITECTURE.md secao 7: "backoff exponencial (ex.: base * 2^attempts, com jitter e teto
+  // maximo)". Estes 3 numeros sao proprios da publicacao da outbox (infra transitoria, falha
+  // tipicamente curta) - nao reaproveitam WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS,
+  // que e o backoff de esperar por uma referencia de negocio ainda nao chegada, um fenomeno
+  // bem mais lento.
+  static readonly RETRY_BASE_DELAY_MS = 1_000;
+  static readonly RETRY_MAX_DELAY_MS = 300_000;
+  static readonly RETRY_JITTER_MS = 1_000;
+
   private constructor(
     public readonly id: string,
     public readonly aggregateId: string,
@@ -65,5 +81,27 @@ export class OutboxMessage {
 
   get publishedAt(): Date | undefined {
     return this._publishedAt;
+  }
+
+  markPublished(now: Date): void {
+    if (this._publishedAt) {
+      throw new OutboxMessageAlreadyPublishedError(this.id);
+    }
+    this._publishedAt = now;
+  }
+
+  // Nunca ha um failureCode/estado terminal de desistencia aqui (diferente de
+  // WagerTransaction.markPendingReference, que esgota e rejeita) - um evento ja comitado nao
+  // pode ser descartado sem violar "nenhum evento perdido"; so o delay tem teto, as tentativas
+  // nao.
+  scheduleRetry(now: Date): void {
+    if (this._publishedAt) {
+      throw new OutboxMessageAlreadyPublishedError(this.id);
+    }
+    this._attempts += 1;
+    const exponentialDelay = OutboxMessage.RETRY_BASE_DELAY_MS * 2 ** (this._attempts - 1);
+    const cappedDelay = Math.min(exponentialDelay, OutboxMessage.RETRY_MAX_DELAY_MS);
+    const jitter = Math.random() * OutboxMessage.RETRY_JITTER_MS;
+    this._nextAttemptAt = new Date(now.getTime() + cappedDelay + jitter);
   }
 }

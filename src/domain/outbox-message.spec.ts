@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { EventContext, IntegrationEventProps } from "./integration-event";
 import { IntegrationEvent } from "./integration-event";
-import { OutboxMessage, type OutboxMessageState } from "./outbox-message";
+import { OutboxMessage, OutboxMessageAlreadyPublishedError, type OutboxMessageState } from "./outbox-message";
 
 interface TestEventData {
   foo: string;
@@ -84,5 +84,63 @@ describe("OutboxMessage.rehydrate", () => {
     expect(message.attempts).toBe(0);
     expect(message.nextAttemptAt).toBeUndefined();
     expect(message.publishedAt).toBeUndefined();
+  });
+});
+
+function buildPendingMessage(): OutboxMessage {
+  const occurredAt = new Date("2026-02-01T10:00:00.000Z");
+  const event = TestEvent.from({ correlationId: "correlation-1", occurredAt });
+  return OutboxMessage.enqueue(event);
+}
+
+describe("OutboxMessage.markPublished", () => {
+  test("markPublished sets publishedAt to the given instant, leaving attempts and nextAttemptAt untouched", () => {
+    const message = buildPendingMessage();
+    const now = new Date("2026-02-01T10:00:05.000Z");
+
+    message.markPublished(now);
+
+    expect(message.publishedAt).toEqual(now);
+    expect(message.attempts).toBe(0);
+    expect(message.nextAttemptAt).toBeUndefined();
+  });
+
+  test("markPublished throws OutboxMessageAlreadyPublishedError when publishedAt is already set", () => {
+    const message = buildPendingMessage();
+    message.markPublished(new Date("2026-02-01T10:00:05.000Z"));
+
+    expect(() => message.markPublished(new Date("2026-02-01T10:00:06.000Z"))).toThrow(
+      OutboxMessageAlreadyPublishedError,
+    );
+  });
+});
+
+describe("OutboxMessage.scheduleRetry", () => {
+  test("scheduleRetry increments attempts and schedules nextAttemptAt within the exponential-backoff bounds, capped at the max delay", () => {
+    const message = buildPendingMessage();
+    const now = new Date("2026-02-01T10:00:00.000Z");
+
+    message.scheduleRetry(now);
+    expect(message.attempts).toBe(1);
+    const firstDelay = (message.nextAttemptAt as Date).getTime() - now.getTime();
+    expect(firstDelay).toBeGreaterThanOrEqual(OutboxMessage.RETRY_BASE_DELAY_MS);
+    expect(firstDelay).toBeLessThan(OutboxMessage.RETRY_BASE_DELAY_MS + OutboxMessage.RETRY_JITTER_MS);
+
+    for (let i = 0; i < 9; i++) {
+      message.scheduleRetry(now);
+    }
+    expect(message.attempts).toBe(10);
+    const laterDelay = (message.nextAttemptAt as Date).getTime() - now.getTime();
+    expect(laterDelay).toBeGreaterThan(firstDelay);
+    expect(laterDelay).toBeLessThanOrEqual(OutboxMessage.RETRY_MAX_DELAY_MS + OutboxMessage.RETRY_JITTER_MS);
+  });
+
+  test("scheduleRetry throws when the message is already published", () => {
+    const message = buildPendingMessage();
+    message.markPublished(new Date("2026-02-01T10:00:05.000Z"));
+
+    expect(() => message.scheduleRetry(new Date("2026-02-01T10:00:06.000Z"))).toThrow(
+      OutboxMessageAlreadyPublishedError,
+    );
   });
 });
