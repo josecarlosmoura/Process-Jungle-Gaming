@@ -51,6 +51,10 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   interno: `status`, `kind`, `money` e, quando presentes, `referenceTransactionId` e (quando
   terminal) `failureCode`/`processedAt`. `404` para id inexistente, `400` para id malformado
   (não-UUID).
+- `GET /providers/:providerId/wagering/transactions/:externalTransactionId` — mesma consulta
+  acima, pela chave de negócio do provedor `(providerId, externalTransactionId)` em vez do id
+  interno; mesmo formato de resposta (mesma função de formatação). `404` quando a combinação não
+  existir.
 - **Outbox Publisher Worker** — roda em toda instância da aplicação (sem eleição de líder),
   reivindicando mensagens pendentes de `outbox_messages` via `FOR UPDATE SKIP LOCKED` e publicando
   cada uma na fila SQS `integration-events.fifo` (`MessageGroupId` = `aggregateId`,
@@ -144,6 +148,9 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
 
 # consulta a BET acima pelo id interno (transactionId devolvido no POST acima)
 curl -i http://localhost:3000/wagering/transactions/<transaction-id-da-bet>
+
+# mesma consulta, agora pela chave de negocio do provedor (sem precisar do id interno)
+curl -i http://localhost:3000/providers/provider-a/wagering/transactions/bet-001
 
 # processa um WIN referenciando a BET acima (credita a wallet)
 curl -s -X POST http://localhost:3000/wagering/transactions \
