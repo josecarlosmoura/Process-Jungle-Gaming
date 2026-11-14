@@ -108,6 +108,15 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   mensagens (`ApproximateNumberOfMessages`, sem consumir nem apagar nada dela — requer auditoria
   manual). Intervalo de polling configurável via `DLQ_MONITOR_POLL_INTERVAL_MS` (default `5000`).
 - `GET /health/live`, `GET /health/ready` — liveness e readiness (Postgres + SQS).
+- **Logs estruturados e `correlationId`** — todo log da aplicação sai como JSON (NDJSON) via
+  `pino` (`app.useLogger()`, nenhum `console.log` em código de produção). Um `correlationId` é
+  extraído do header `X-Correlation-Id` (HTTP) ou do atributo `correlationId` da mensagem (SQS) na
+  borda — gerado quando ausente — e propagado por `AsyncLocalStorage` (`LogContextService`) por
+  toda a operação, inclusive nos caminhos assíncronos (outbox publisher, reprocessador de
+  referência pendente, cada um reaproveitando o `correlationId` da operação original). O log do
+  desfecho de cada transação (`PROCESSED`/`REJECTED`/`PENDING_REFERENCE`/`FAILED`) inclui
+  `correlationId`, `transactionId`, `walletId` e `providerId` — nunca `money`/o payload de entrada
+  inteiro.
 
 ## Setup local
 
@@ -157,11 +166,18 @@ curl -s -X POST http://localhost:3000/wallets \
   -H "Content-Type: application/json" \
   -d '{"playerId":"<uuid>","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
 
-# processa uma BET (debita a wallet criada acima)
+# processa uma BET (debita a wallet criada acima) - com um correlationId proprio, para rastrear
+# nos logs (se omitido, a aplicacao gera um)
 curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider-a:bet-001" \
+  -H "X-Correlation-Id: minha-trace-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"bet-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+
+# confere o log estruturado da BET acima (rode a app com `bun run start:dev | tee /tmp/app.log`)
+grep '"correlationId":"minha-trace-001"' /tmp/app.log | jq .
+# esperado: uma linha JSON com event=wager_transaction_outcome, status=PROCESSED,
+# transactionId/walletId/providerId preenchidos - nunca "money" nem o payload de entrada inteiro
 
 # consulta a BET acima pelo id interno (transactionId devolvido no POST acima)
 curl -i http://localhost:3000/wagering/transactions/<transaction-id-da-bet>
