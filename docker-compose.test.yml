@@ -1,0 +1,71 @@
+# Uso exclusivo da suite de testes de concorrencia (T214) - sobe postgres/localstack (herdados de
+# docker-compose.yml via "include") mais N replicas reais da propria aplicacao, para o cenario
+# obrigatorio de 3+ instancias. Nunca usar simultaneamente com "docker compose up" (docker-compose.yml
+# sozinho) - os dois sobem os mesmos nomes de container/volume para postgres/localstack.
+include:
+  - docker-compose.yml
+
+services:
+  # One-shot: roda as migrations uma unica vez antes de qualquer replica de "app" iniciar. Nunca
+  # dentro do CMD/entrypoint de "app" - 3 replicas subindo ao mesmo tempo tentando "migration:up"
+  # simultaneamente correriam a mesma migration sem nenhuma garantia de lock distribuido contra essa
+  # corrida especifica.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: wagering_test
+    command: ["bun", "run", "migration:up"]
+    networks:
+      - wagering-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Sem "container_name" fixo de proposito - e o que permite "--scale app=3" (nomes de container
+    # fixos colidiriam entre replicas).
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: wagering_test
+      LOCALSTACK_ENDPOINT: http://localstack:4566
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      LEDGER_CURSOR_SECRET: ${LEDGER_CURSOR_SECRET}
+    # Porta efemera do host por replica - cada "docker compose ... up --scale app=3" ganha 3 portas
+    # de host distintas, descobertas via "docker compose -f docker-compose.test.yml port --index <n>
+    # app 3000".
+    ports:
+      - "3000"
+    networks:
+      - wagering-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      localstack-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s

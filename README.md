@@ -102,7 +102,20 @@ bun run lint             # biome lint
 bun run test             # suíte completa (unidade + integração + e2e, requer Postgres/LocalStack no ar)
 bun run test:unit        # exclui *.integration.spec.ts
 bun run test:integration # só *.integration.spec.ts, isolado por arquivo
-bun run test:concurrency # cenário obrigatório de concorrência (test/concurrency/), paralelismo HTTP real
+bun run test:concurrency # 7 cenários obrigatórios de concorrência (test/concurrency/), paralelismo HTTP/SQS real
+```
+
+### Cenário de 3+ instâncias reais (`test/concurrency/multi-instance.spec.ts`)
+
+Um dos 7 cenários de `test:concurrency` exige 3 processos físicos distintos da própria aplicação
+(não 3 portas do mesmo processo). Antes de rodar `test:concurrency`, suba essa infraestrutura
+dedicada (nunca ao mesmo tempo que `docker compose up` sozinho — os dois sobem os mesmos nomes de
+container/volume para Postgres/LocalStack):
+
+```bash
+docker compose -f docker-compose.test.yml up -d --scale app=3
+bun run test:concurrency
+docker compose -f docker-compose.test.yml down
 ```
 
 Sempre use `bun run test`/`test:*` (nunca `bun test` direto): vários specs mutam `process.env`

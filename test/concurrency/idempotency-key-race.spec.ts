@@ -25,6 +25,7 @@ Object.assign(process.env, {
 const { AppModule } = await import("../../src/app.module");
 const { validateEnv } = await import("../../src/infrastructure/config/env.schema");
 const { buildMikroOrmOptions } = await import("../../src/infrastructure/database/mikro-orm.config");
+const { Money } = await import("../../src/domain/money");
 
 const PORT = 4321;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -106,6 +107,20 @@ async function countWhere(table: string, column: string, value: string): Promise
   return Number(rows[0]?.count ?? 0);
 }
 
+// Mesmo helper de test/concurrency/concurrent-bet.spec.ts - a invariante final que T214 exige em
+// toda esta suite: wallet.balance precisa bater com o saldo reconstruido somando/subtraindo cada
+// lancamento do ledger daquela wallet, nunca so o numero de linhas.
+async function reconstructLedgerBalance(walletId: string, currency: string) {
+  const rows = await connection.execute<{ direction: string; money_amount: string; money_currency: string }[]>(
+    "select direction, money_amount, money_currency from wallet_ledger_entries where wallet_id = ?",
+    [walletId],
+  );
+  return rows.reduce((balance, row) => {
+    const entry = Money.from({ amount: row.money_amount, currency: row.money_currency });
+    return row.direction === "CREDIT" ? balance.add(entry) : balance.subtract(entry);
+  }, Money.zero(currency));
+}
+
 function betRequestBody(walletId: string, amount: string, overrides: Record<string, unknown> = {}) {
   return {
     providerId: "provider-idempotency-race",
@@ -163,11 +178,14 @@ describe("corrida de inserção na mesma Idempotency-Key - payload idêntico sob
         expect(await countWhere("wager_transactions", "idempotency_key", idempotencyKey)).toBe(1);
         expect(await countWhere("wallet_ledger_entries", "transaction_id", transactionId as string)).toBe(1);
 
-        const rows = await connection.execute<{ balance_amount: string }[]>(
-          "select balance_amount from wallets where id = ?",
+        const rows = await connection.execute<{ balance_amount: string; currency: string }[]>(
+          "select balance_amount, currency from wallets where id = ?",
           [wallet.id],
         );
         expect(rows[0]?.balance_amount).toBe("990.00");
+
+        const reconstructed = await reconstructLedgerBalance(wallet.id, rows[0]?.currency as string);
+        expect(reconstructed.toJSON()).toEqual({ amount: rows[0]?.balance_amount as string, currency: rows[0]?.currency as string });
       } finally {
         await deleteWalletCascade(wallet.id);
       }
