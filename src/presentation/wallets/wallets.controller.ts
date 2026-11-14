@@ -1,11 +1,16 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from "@nestjs/common";
 import { z } from "zod";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { CreateWalletUseCase } from "../../application/use-cases/create-wallet.use-case";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { GetWalletUseCase } from "../../application/use-cases/get-wallet.use-case";
-import { Money } from "../../domain/money";
+// biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
+import { GetWalletLedgerUseCase, type GetWalletLedgerResult } from "../../application/use-cases/get-wallet-ledger.use-case";
+import { Money, type MoneyProps } from "../../domain/money";
 import type { Wallet } from "../../domain/wallet";
+
+const DEFAULT_LEDGER_LIMIT = 50;
+const MAX_LEDGER_LIMIT = 200;
 
 const createWalletBodySchema = z.object({
   playerId: z.string().min(1),
@@ -33,11 +38,52 @@ function toResponseBody(wallet: Wallet): WalletResponseBody {
   };
 }
 
+interface LedgerEntryResponseBody {
+  id: string;
+  transactionId: string;
+  direction: string;
+  money: MoneyProps;
+  balanceBefore: MoneyProps;
+  balanceAfter: MoneyProps;
+  createdAt: Date;
+}
+
+interface GetWalletLedgerResponseBody {
+  entries: LedgerEntryResponseBody[];
+  nextCursor?: string;
+}
+
+export function parseLedgerLimit(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_LEDGER_LIMIT;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    throw new BadRequestException("limit: must be a positive integer");
+  }
+  return Math.min(Number(raw), MAX_LEDGER_LIMIT);
+}
+
+function toLedgerResponseBody(result: GetWalletLedgerResult): GetWalletLedgerResponseBody {
+  return {
+    entries: result.entries.map((entry) => ({
+      id: entry.id,
+      transactionId: entry.transactionId,
+      direction: entry.direction,
+      money: entry.money.toJSON(),
+      balanceBefore: entry.balanceBefore.toJSON(),
+      balanceAfter: entry.balanceAfter.toJSON(),
+      createdAt: entry.createdAt,
+    })),
+    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+  };
+}
+
 @Controller("wallets")
 export class WalletsController {
   constructor(
     private readonly createWalletUseCase: CreateWalletUseCase,
     private readonly getWalletUseCase: GetWalletUseCase,
+    private readonly getWalletLedgerUseCase: GetWalletLedgerUseCase,
   ) {}
 
   @Post()
@@ -66,5 +112,21 @@ export class WalletsController {
 
     const wallet = await this.getWalletUseCase.execute(walletId);
     return toResponseBody(wallet);
+  }
+
+  @Get(":walletId/ledger")
+  async ledger(
+    @Param("walletId") walletId: string,
+    @Query("cursor") cursor: string | undefined,
+    @Query("limit") limitRaw: string | undefined,
+  ): Promise<GetWalletLedgerResponseBody> {
+    const parsedWalletId = walletIdParamSchema.safeParse(walletId);
+    if (!parsedWalletId.success) {
+      throw new BadRequestException(`walletId: must be a valid UUID`);
+    }
+    const limit = parseLedgerLimit(limitRaw);
+
+    const result = await this.getWalletLedgerUseCase.execute({ walletId, cursor, limit });
+    return toLedgerResponseBody(result);
   }
 }

@@ -25,6 +25,11 @@ Object.assign(process.env, {
 const { WalletsModule } = await import("./wallets.module");
 const { validateEnv } = await import("../../infrastructure/config/env.schema");
 const { buildMikroOrmOptions } = await import("../../infrastructure/database/mikro-orm.config");
+const { Money } = await import("../../domain/money");
+const { WagerTransaction } = await import("../../domain/wager-transaction");
+const { WalletLedgerEntry } = await import("../../domain/wallet-ledger-entry");
+const { WagerTransactionMikroOrmRepository } = await import("../../infrastructure/persistence/wager-transaction.repository");
+const { WalletLedgerEntryMikroOrmRepository } = await import("../../infrastructure/persistence/wallet-ledger-entry.repository");
 
 const PORT = 4312;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -101,12 +106,86 @@ async function outboxEventTypesFor(walletId: string): Promise<string[]> {
   return rows.map((row) => row.event_type);
 }
 
+interface LedgerEntryResponseBody {
+  id: string;
+  transactionId: string;
+  direction: string;
+  money: MoneyBody;
+  balanceBefore: MoneyBody;
+  balanceAfter: MoneyBody;
+  createdAt: string;
+}
+
+interface LedgerResponseBody {
+  entries?: LedgerEntryResponseBody[];
+  nextCursor?: string;
+  message?: unknown;
+}
+
+async function getLedger(
+  walletId: string,
+  query: { cursor?: string; limit?: string } = {},
+): Promise<{ status: number; body: LedgerResponseBody }> {
+  const params = new URLSearchParams();
+  if (query.cursor !== undefined) params.set("cursor", query.cursor);
+  if (query.limit !== undefined) params.set("limit", query.limit);
+  const qs = params.toString();
+  const response = await fetch(`${baseUrl}/wallets/${walletId}/ledger${qs ? `?${qs}` : ""}`);
+  return { status: response.status, body: (await response.json()) as LedgerResponseBody };
+}
+
+// Semeia uma BET + seu lancamento de ledger diretamente via repositorio (sem passar pelo
+// POST /wagering/transactions) - mais rapido, e esta suite testa a paginacao da leitura, nao o
+// caminho de escrita (ja coberto em wagering.e2e.spec.ts). sleep de 5ms entre cada uma garante
+// createdAt estritamente crescente, como aconteceria sob o lock pessimista por walletId (nunca
+// duas escritas concorrentes na mesma wallet).
+async function seedLedgerEntry(walletId: string, balanceBefore: string, debit: string): Promise<string> {
+  const transactionId = randomUUID();
+  const transaction = WagerTransaction.create({
+    id: transactionId,
+    providerId: "provider-ledger-test",
+    externalTransactionId: randomUUID(),
+    idempotencyKey: `provider-ledger-test:${randomUUID()}`,
+    payloadHash: "a".repeat(64),
+    walletId,
+    playerId: randomUUID(),
+    roundId: randomUUID(),
+    gameId: "slot-ledger-test",
+    kind: "BET",
+    money: Money.from({ amount: debit, currency: "BRL" }),
+  });
+  await new WagerTransactionMikroOrmRepository(orm.em.fork()).save(transaction);
+
+  const entry = WalletLedgerEntry.create({
+    id: randomUUID(),
+    walletId,
+    transactionId,
+    direction: "DEBIT",
+    money: Money.from({ amount: debit, currency: "BRL" }),
+    balanceBefore: Money.from({ amount: balanceBefore, currency: "BRL" }),
+    balanceAfter: Money.from({ amount: balanceBefore, currency: "BRL" }).subtract(Money.from({ amount: debit, currency: "BRL" })),
+  });
+  await new WalletLedgerEntryMikroOrmRepository(orm.em.fork(), "dev-only-ledger-cursor-secret-not-for-production").save(entry);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  return entry.id;
+}
+
 async function countWhere(table: string, column: string, value: string): Promise<number> {
   const rows = await connection.execute<{ count: string }[]>(
     `select count(*) as count from ${table} where ${column} = ?`,
     [value],
   );
   return Number(rows[0]?.count ?? 0);
+}
+
+// Saldo inicial zero -> sem OPENING nem lancamento de ledger automatico (ja garantido pelos
+// testes de "POST /wallets - sem saldo inicial" abaixo), entao os unicos lancamentos da wallet sao
+// os que seedLedgerEntry cria explicitamente - sem isso, o lancamento CREDIT da OPENING apareceria
+// antes dos lancamentos semeados e quebraria a ordem esperada nos testes de paginacao.
+async function createEmptyWallet(): Promise<string> {
+  const created = await postWallet({ playerId: randomUUID(), initialBalance: { amount: "0.00", currency: "BRL" } });
+  return created.body.id;
 }
 
 describe("POST /wallets - sem saldo inicial", () => {
@@ -342,5 +421,116 @@ describe("POST /wallets - outbox", () => {
     } finally {
       await deleteWalletCascade(body.id);
     }
+  });
+});
+
+describe("GET /wallets/:walletId/ledger", () => {
+  test("returns 200 with up to limit entries ordered by createdAt ascending, including nextCursor on a non-empty page", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      const e1 = await seedLedgerEntry(walletId, "1000.00", "10.00");
+      const e2 = await seedLedgerEntry(walletId, "990.00", "10.00");
+      await seedLedgerEntry(walletId, "980.00", "10.00");
+
+      const { status, body } = await getLedger(walletId, { limit: "2" });
+
+      expect(status).toBe(200);
+      expect(body.entries?.map((e) => e.id)).toEqual([e1, e2]);
+      expect(typeof body.nextCursor).toBe("string");
+      expect(body.nextCursor?.length).toBeGreaterThan(0);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("using nextCursor from a page returns exactly the remaining entries, without repeating or skipping", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      await seedLedgerEntry(walletId, "1000.00", "10.00");
+      await seedLedgerEntry(walletId, "990.00", "10.00");
+      const e3 = await seedLedgerEntry(walletId, "980.00", "10.00");
+
+      const page1 = await getLedger(walletId, { limit: "2" });
+      const cursor = page1.body.nextCursor as string;
+
+      const page2 = await getLedger(walletId, { cursor, limit: "2" });
+
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries?.map((e) => e.id)).toEqual([e3]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("an exhausted cursor returns entries empty and omits nextCursor", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      await seedLedgerEntry(walletId, "1000.00", "10.00");
+      const lastId = await seedLedgerEntry(walletId, "990.00", "10.00");
+
+      const page1 = await getLedger(walletId, { limit: "2" });
+      expect(page1.body.entries?.map((e) => e.id)).toEqual(expect.arrayContaining([lastId]));
+      const cursor = page1.body.nextCursor as string;
+
+      const page2 = await getLedger(walletId, { cursor, limit: "2" });
+
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries).toEqual([]);
+      expect(page2.body.nextCursor).toBeUndefined();
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("a new entry inserted between fetching page 1 and page 2 (with page 1's cursor) does not corrupt pagination", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      await seedLedgerEntry(walletId, "1000.00", "10.00");
+      await seedLedgerEntry(walletId, "990.00", "10.00");
+      const e3 = await seedLedgerEntry(walletId, "980.00", "10.00");
+
+      const page1 = await getLedger(walletId, { limit: "2" });
+      const cursorAfterPage1 = page1.body.nextCursor as string;
+
+      // Insercao concorrente entre as duas chamadas de paginacao - o cenario exigido pela tarefa.
+      const e4 = await seedLedgerEntry(walletId, "970.00", "10.00");
+
+      const page2 = await getLedger(walletId, { cursor: cursorAfterPage1, limit: "10" });
+
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries?.map((e) => e.id)).toEqual([e3, e4]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 400 for a limit that is not a positive integer", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      const { status } = await getLedger(walletId, { limit: "0" });
+      expect(status).toBe(400);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 400 for a malformed or tampered cursor", async () => {
+    const walletId = await createEmptyWallet();
+    try {
+      const { status } = await getLedger(walletId, { cursor: "not-a-valid-cursor" });
+      expect(status).toBe(400);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 404 for a well-formed but unknown walletId", async () => {
+    const { status } = await getLedger(randomUUID());
+    expect(status).toBe(404);
+  });
+
+  test("returns 400 for a malformed non-UUID walletId", async () => {
+    const { status } = await getLedger("not-a-uuid");
+    expect(status).toBe(400);
   });
 });

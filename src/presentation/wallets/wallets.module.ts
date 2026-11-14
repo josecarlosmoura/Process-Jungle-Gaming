@@ -14,6 +14,8 @@ import { WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE } from "../../application/port
 import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../../application/ports/outbox-message.repository";
 import { CreateWalletUseCase } from "../../application/use-cases/create-wallet.use-case";
 import { GetWalletUseCase } from "../../application/use-cases/get-wallet.use-case";
+import { GetWalletLedgerUseCase } from "../../application/use-cases/get-wallet-ledger.use-case";
+import type { WalletLedgerEntryRepository } from "../../application/ports/wallet-ledger-entry.repository";
 import { WalletsController } from "./wallets.controller";
 
 @Module({
@@ -31,6 +33,15 @@ import { WalletsController } from "./wallets.controller";
     { provide: OUTBOX_MESSAGE_REPOSITORY_INTERFACE, useClass: OutboxMessageMikroOrmRepository },
     CreateWalletUseCase,
     GetWalletUseCase,
+    {
+      provide: GetWalletLedgerUseCase,
+      useFactory: (
+        getWalletUseCase: GetWalletUseCase,
+        ledgerRepository: WalletLedgerEntryRepository,
+        config: AppConfigService,
+      ) => new GetWalletLedgerUseCase(getWalletUseCase, ledgerRepository, config.ledgerCursorSecret),
+      inject: [GetWalletUseCase, WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE, AppConfigService],
+    },
   ],
 })
 export class WalletsModule {}

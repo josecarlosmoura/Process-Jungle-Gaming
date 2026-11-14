@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { PayloadValidationError } from "../../domain/domain-error";
 import type { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
 
 export const WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE = Symbol("WalletLedgerEntryRepository");
@@ -19,7 +20,7 @@ export interface LedgerCursor {
   id: string;
 }
 
-export class InvalidLedgerCursorError extends Error {
+export class InvalidLedgerCursorError extends PayloadValidationError {
   constructor(reason: string) {
     super(`Invalid ledger cursor: ${reason}`);
     this.name = "InvalidLedgerCursorError";
