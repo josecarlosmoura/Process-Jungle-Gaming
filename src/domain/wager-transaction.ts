@@ -85,9 +85,12 @@ export class LedgerDirectionNotApplicableError extends Error {
 
 export class WagerTransaction {
   // Primeiro passo do backoff exponencial de ARCHITECTURE.md secao 8 ("ex.: 1min, 2min, 4min...
-  // ate 30min") - so o valor inicial, gravado ao entrar em PENDING_REFERENCE; a progressao
-  // completa e o limite de tentativas/TTL sao do worker de reprocessamento, ainda nao implementado.
+  // ate 30min") - usado tanto pelo valor inicial (markPendingReference) quanto como base da
+  // progressao completa (scheduleReferenceRetry), para os dois nunca poderem divergir.
   static readonly INITIAL_PENDING_REFERENCE_DELAY_MS = 60_000;
+  static readonly MAX_PENDING_REFERENCE_DELAY_MS = 1_800_000;
+  static readonly MAX_PENDING_REFERENCE_ATTEMPTS = 10;
+  static readonly PENDING_REFERENCE_TTL_MS = 86_400_000;
 
   private constructor(
     public readonly id: string,
@@ -232,6 +235,28 @@ export class WagerTransaction {
     this._status = "PENDING_REFERENCE";
     this._attempts = 0;
     this._nextAttemptAt = new Date(now.getTime() + WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS);
+  }
+
+  // Permanece em PENDING_REFERENCE (nunca transiciona) - só avança attempts/nextAttemptAt. O
+  // worker de reprocessamento (T212) chama isto quando a referência ainda não resolveu e nem o
+  // limite de tentativas nem o TTL se esgotaram ainda.
+  scheduleReferenceRetry(now: Date): void {
+    this.assertTransitionAllowed("scheduleReferenceRetry", ["PENDING_REFERENCE"]);
+    this._attempts = (this._attempts ?? 0) + 1;
+    const exponentialDelay = WagerTransaction.INITIAL_PENDING_REFERENCE_DELAY_MS * 2 ** (this._attempts - 1);
+    const delay = Math.min(exponentialDelay, WagerTransaction.MAX_PENDING_REFERENCE_DELAY_MS);
+    this._nextAttemptAt = new Date(now.getTime() + delay);
+  }
+
+  // Verificado independentemente de hasExceededReferenceTtl() pelo worker de reprocessamento -
+  // ARCHITECTURE.md secao 8: "o que ocorrer primeiro" entre 10 tentativas e 24h, nunca os dois
+  // juntos atrás de um único booleano combinado.
+  hasExhaustedReferenceAttempts(): boolean {
+    return (this._attempts ?? 0) >= WagerTransaction.MAX_PENDING_REFERENCE_ATTEMPTS;
+  }
+
+  hasExceededReferenceTtl(now: Date): boolean {
+    return now.getTime() - this.createdAt.getTime() >= WagerTransaction.PENDING_REFERENCE_TTL_MS;
   }
 
   reject(code: FailureCode): void {

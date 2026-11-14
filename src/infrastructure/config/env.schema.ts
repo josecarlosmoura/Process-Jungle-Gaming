@@ -45,6 +45,10 @@ export const envSchema = z.object({
   // Mesmo principio de WAGER_TRANSACTIONS_QUEUE_NAME acima - so para isolar um teste de
   // integracao numa DLQ descartavel propria, nunca usado em producao.
   WAGER_TRANSACTIONS_DLQ_NAME: z.string().min(1).default(WAGER_TRANSACTIONS_DLQ_NAME),
+  // Intervalo de poll do PendingReferenceReprocessorScheduler - mesma convencao de
+  // OUTBOX_PUBLISHER_POLL_INTERVAL_MS/OUTBOX_PUBLISHER_BATCH_SIZE.
+  PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(5000),
+  PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE: z.coerce.number().int().min(1).default(20),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

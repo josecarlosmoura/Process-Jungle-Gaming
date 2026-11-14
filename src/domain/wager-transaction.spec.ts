@@ -238,6 +238,100 @@ describe("WagerTransaction", () => {
     }
   });
 
+  test("scheduleReferenceRetry over PENDING_REFERENCE records attempts 1 and nextAttemptAt one minute after the given instant", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    transaction.markPendingReference(new Date("2026-01-01T00:00:00.000Z"));
+    const now = new Date("2026-01-01T00:01:00.000Z");
+
+    transaction.scheduleReferenceRetry(now);
+
+    expect(transaction.attempts).toBe(1);
+    expect(transaction.nextAttemptAt).toEqual(new Date("2026-01-01T00:02:00.000Z"));
+  });
+
+  test("scheduleReferenceRetry across 10 successive calls follows the backoff sequence 1, 2, 4, 8, 16, 30, 30, 30, 30, 30 minutes", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "ROLLBACK", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    transaction.markPendingReference(now);
+
+    const expectedMinutes = [1, 2, 4, 8, 16, 30, 30, 30, 30, 30];
+    for (const [index, minutes] of expectedMinutes.entries()) {
+      transaction.scheduleReferenceRetry(now);
+      expect(transaction.attempts).toBe(index + 1);
+      expect(transaction.nextAttemptAt).toEqual(new Date(now.getTime() + minutes * 60_000));
+      now = transaction.nextAttemptAt as Date;
+    }
+  });
+
+  test("scheduleReferenceRetry on two successive calls produces a strictly increasing nextAttemptAt", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    transaction.markPendingReference(now);
+
+    transaction.scheduleReferenceRetry(now);
+    const first = transaction.nextAttemptAt as Date;
+
+    transaction.scheduleReferenceRetry(now);
+    const second = transaction.nextAttemptAt as Date;
+
+    expect(second.getTime()).toBeGreaterThan(first.getTime());
+  });
+
+  test("hasExhaustedReferenceAttempts returns false below 10 attempts and true at 10 or more", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    transaction.markPendingReference(now);
+
+    for (let i = 0; i < 9; i++) {
+      expect(transaction.hasExhaustedReferenceAttempts()).toBe(false);
+      transaction.scheduleReferenceRetry(now);
+    }
+    // attempts === 9 aqui - ainda abaixo do limite.
+    expect(transaction.hasExhaustedReferenceAttempts()).toBe(false);
+
+    transaction.scheduleReferenceRetry(now);
+    // attempts === 10 - no limite.
+    expect(transaction.hasExhaustedReferenceAttempts()).toBe(true);
+  });
+
+  test("hasExceededReferenceTtl returns false just under 24h and true at or after 24h since createdAt", () => {
+    const transaction = WagerTransaction.create(
+      buildProps({ kind: "ROLLBACK", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    const createdAt = transaction.createdAt;
+
+    const justUnder = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000 - 1);
+    expect(transaction.hasExceededReferenceTtl(justUnder)).toBe(false);
+
+    const exactly24h = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
+    expect(transaction.hasExceededReferenceTtl(exactly24h)).toBe(true);
+  });
+
+  test("scheduleReferenceRetry outside PENDING_REFERENCE throws InvalidTransactionStateError without mutating it", () => {
+    const pending = WagerTransaction.create(
+      buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),
+    );
+    const beforePending = snapshotOf(pending);
+    expect(() => pending.scheduleReferenceRetry(new Date())).toThrow(InvalidTransactionStateError);
+    expect(snapshotOf(pending)).toEqual(beforePending);
+
+    const terminalStatuses: WagerTransactionStatus[] = ["PROCESSED", "REJECTED", "FAILED"];
+    for (const status of terminalStatuses) {
+      const transaction = buildTerminalTransaction(status);
+      const before = snapshotOf(transaction);
+      expect(() => transaction.scheduleReferenceRetry(new Date())).toThrow(InvalidTransactionStateError);
+      expect(snapshotOf(transaction)).toEqual(before);
+    }
+  });
+
   test("fail over a PENDING_REFERENCE transaction throws InvalidTransactionStateError without mutating it", () => {
     const transaction = WagerTransaction.create(
       buildProps({ kind: "REFUND", referenceExternalTransactionId: "ext-ref-1" }),

@@ -27,6 +27,12 @@ const { validateEnv } = await import("../../infrastructure/config/env.schema");
 const { buildMikroOrmOptions } = await import("../../infrastructure/database/mikro-orm.config");
 const { Money } = await import("../../domain/money");
 const { computeWagerTransactionPayloadHash } = await import("../../application/use-cases/wager-transaction-payload-hash");
+const { WalletMikroOrmRepository } = await import("../../infrastructure/persistence/wallet.repository");
+const { WagerTransactionMikroOrmRepository } = await import("../../infrastructure/persistence/wager-transaction.repository");
+const { WalletLedgerEntryMikroOrmRepository } = await import("../../infrastructure/persistence/wallet-ledger-entry.repository");
+const { OutboxMessageMikroOrmRepository } = await import("../../infrastructure/persistence/outbox-message.repository");
+const { ReferenceResolver } = await import("../../application/reference-resolver");
+const { ReprocessPendingReferenceUseCase } = await import("../../application/use-cases/reprocess-pending-reference.use-case");
 
 const PORT = 4316;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -45,6 +51,22 @@ const orm = await MikroORM.init({
   connect: true,
 });
 const connection = orm.em.getConnection();
+
+// Instancia o worker diretamente contra o mesmo orm.em da app HTTP (mesmo padrao de
+// publish-outbox.use-case.integration.spec.ts) - simula um ciclo do
+// PendingReferenceReprocessorScheduler sem precisar subir um segundo modulo/porta so para isso.
+function makeReprocessUseCase() {
+  const wagerTransactionRepository = new WagerTransactionMikroOrmRepository(orm.em);
+  return new ReprocessPendingReferenceUseCase(
+    orm.em,
+    new WalletMikroOrmRepository(orm.em),
+    wagerTransactionRepository,
+    new WalletLedgerEntryMikroOrmRepository(orm.em, "dev-only-ledger-cursor-secret-not-for-production"),
+    new OutboxMessageMikroOrmRepository(orm.em),
+    new ReferenceResolver(wagerTransactionRepository),
+    20,
+  );
+}
 
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [WageringModule] }).compile();
@@ -1662,6 +1684,63 @@ describe("POST /wagering/transactions - ROLLBACK com referência inexistente", (
       expect(metadata.attempts).toBe(0);
       expect(metadata.nextAttemptAt).not.toBeNull();
       expect((metadata.nextAttemptAt as Date).getTime()).toBeGreaterThan(beforeSubmit);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("POST /wagering/transactions - cenário fora de ordem resolvido pelo reprocessador (T212)", () => {
+  test("a ROLLBACK submitted before its BET exists is resolved to PROCESSED by the reprocessor once the BET is submitted, without any further request", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const playerId = randomUUID();
+    const roundId = `round-${randomUUID()}`;
+    const betExternalId = randomUUID();
+    try {
+      const rollback = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          kind: "ROLLBACK",
+          money: { amount: "30.00", currency: "BRL" },
+          referenceExternalTransactionId: betExternalId,
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(rollback.status).toBe(202);
+      expect(rollback.body.status).toBe("PENDING_REFERENCE");
+      const rollbackId = rollback.body.transactionId as string;
+
+      const bet = await postBet(
+        betPayload(walletId, {
+          providerId,
+          playerId,
+          roundId,
+          externalTransactionId: betExternalId,
+          money: { amount: "30.00", currency: "BRL" },
+        }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+      expect(bet.body.status).toBe("PROCESSED");
+
+      // Forca o nextAttemptAt (1min por padrao) para o passado - nenhuma outra chamada HTTP/SQS
+      // alem das duas acima acontece neste teste; so um ciclo direto do worker, equivalente ao
+      // scheduler em producao.
+      await connection.execute("update wager_transactions set next_attempt_at = now() - interval '1 second' where id = ?", [
+        rollbackId,
+      ]);
+      await makeReprocessUseCase().execute();
+
+      const resolved = await connection.execute<{ status: string; reference_transaction_id: string | null }[]>(
+        "select status, reference_transaction_id from wager_transactions where id = ?",
+        [rollbackId],
+      );
+      expect(resolved[0]?.status).toBe("PROCESSED");
+      expect(resolved[0]?.reference_transaction_id).toBe(bet.body.transactionId as string);
+      expect(await countWhere("wallet_ledger_entries", "wallet_id", walletId)).toBe(2); // BET (débito) + ROLLBACK (crédito).
     } finally {
       await deleteWalletCascade(walletId);
     }

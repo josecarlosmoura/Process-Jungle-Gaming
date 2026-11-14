@@ -28,9 +28,8 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
     válida (`failureCode: "REFERENCE_MISMATCH"`/`"REFERENCE_NOT_FOUND"`). Quando a referência ainda
     não existe (ou ainda está em processamento), responde `202 Accepted` com `status:
     "PENDING_REFERENCE"` em vez de rejeitar, gravando `attempts = 0` e `next_attempt_at` (1 minuto
-    no futuro — primeiro passo do backoff) para o worker de reprocessamento (ainda não
-    implementado) reler depois; repetir a mesma `Idempotency-Key` nesse estado nunca recalcula
-    esses metadados.
+    no futuro — primeiro passo do backoff) para o **Pending-Reference Reprocessor Worker** reler
+    depois; repetir a mesma `Idempotency-Key` nesse estado nunca recalcula esses metadados.
   - `ROLLBACK`: exige `referenceExternalTransactionId` apontando para uma `BET`, `WIN` ou
     `REFUND` já `PROCESSED` (nunca uma `LOSS`, que não afeta saldo), com o mesmo valor exato —
     aplica o efeito **inverso** ao da referência (credita de volta uma `BET`; debita de volta uma
@@ -65,6 +64,19 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   (`MaxNumberOfMessages: 1`); em `SIGTERM` (`app.enableShutdownHooks()`), para de buscar novas
   mensagens e aguarda a mensagem em andamento terminar antes do processo encerrar. Tempo de long
   polling configurável via `SQS_CONSUMER_WAIT_TIME_SECONDS` (default `10`, máximo `20`).
+- **Pending-Reference Reprocessor Worker** — roda em toda instância (mesmo padrão sem eleição de
+  líder do Outbox Publisher), reivindicando via `FOR UPDATE SKIP LOCKED` as `WagerTransaction`
+  `PENDING_REFERENCE` cujo `next_attempt_at` já venceu e tentando resolver a referência de novo.
+  Resolvida: aplica o efeito (crédito/débito, sob o mesmo lock pessimista da wallet de
+  `POST /wagering/transactions`), marca `PROCESSED` e publica `WagerTransactionProcessed`/
+  `WalletBalanceChanged`. Ainda não resolvida: agenda outra tentativa com backoff exponencial (1,
+  2, 4, 8, 16, 30... minutos, teto de 30min) até **10 tentativas** ou **24h** desde a criação — o
+  que ocorrer primeiro —, rejeitando então com `failureCode: "REFERENCE_NOT_FOUND"` e publicando
+  `WagerTransactionRejected`. Uma referência que já terminou num estado definitivo inválido
+  (`REJECTED`/`FAILED`, ou já revertida pelo mesmo tipo) rejeita de imediato, sem esperar esgotar
+  tentativas/TTL. Intervalo de polling e tamanho do lote configuráveis via
+  `PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS`/`PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE`
+  (defaults `5000`/`20`).
 - **DLQ** (`wager-transactions-dlq.fifo`) — redrive policy final: `maxReceiveCount=5` (no máximo
   ~150s de redelivery antes da DLQ, justificativa em `Documents/ARCHITECTURE.md` seção 2.2).
   `DlqMonitorScheduler` roda em toda instância e loga um aviso sempre que a DLQ tiver uma ou mais
@@ -137,6 +149,26 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
   -H "Idempotency-Key: provider-a:rollback-001" \
   -d '{"providerId":"provider-a","externalTransactionId":"rollback-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-1","gameId":"fortune-chimp","kind":"ROLLBACK","money":{"amount":"50.00","currency":"BRL"},"referenceExternalTransactionId":"win-001"}'
 
+# cenario "fora de ordem": ROLLBACK referenciando uma BET que ainda nao existe
+curl -s -X POST http://localhost:3000/wagering/transactions \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: provider-a:rollback-fora-ordem-001" \
+  -d '{"providerId":"provider-a","externalTransactionId":"rollback-fora-ordem-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-3","gameId":"fortune-chimp","kind":"ROLLBACK","money":{"amount":"30.00","currency":"BRL"},"referenceExternalTransactionId":"bet-fora-ordem-001"}'
+# esperado: 202 Accepted, status PENDING_REFERENCE
+
+# agora a BET referenciada chega
+curl -s -X POST http://localhost:3000/wagering/transactions \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: provider-a:bet-fora-ordem-001" \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-fora-ordem-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-3","gameId":"fortune-chimp","kind":"BET","money":{"amount":"30.00","currency":"BRL"}}'
+# esperado: 201, status PROCESSED
+
+# aguarde o nextAttemptAt (1min por padrao) e um ciclo do worker (PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS, default 5s)
+sleep 65
+docker compose exec postgres psql -U wagering -d wagering_dev -c \
+  "select status, reference_transaction_id, attempts from wager_transactions where idempotency_key = 'provider-a:rollback-fora-ordem-001';"
+# esperado: status PROCESSED, reference_transaction_id apontando para a BET acima - sem nenhuma nova chamada HTTP/SQS alem das duas acima
+
 # confere os eventos de integração gravados na outbox para a wallet acima - published_at e
 # preenchido em ate um ciclo de polling (OUTBOX_PUBLISHER_POLL_INTERVAL_MS, default 2s) pelo
 # Outbox Publisher Worker, que roda em background na propria aplicacao
@@ -176,19 +208,33 @@ kill -TERM <pid-do-processo-node>
 # "[WagerTransactionSqsConsumer] parando de receber novas mensagens de wager-transactions.fifo"
 
 # DLQ: forcar uma falha permanente (infraestrutura indisponivel) e confirmar que a mensagem
-# aparece na DLQ apos maxReceiveCount=5 entregas (~150s, VisibilityTimeout=30s), e que o
-# DlqMonitorScheduler loga um aviso quando isso acontece
+# aparece na DLQ apos maxReceiveCount=5 entregas, e que o DlqMonitorScheduler loga um aviso quando
+# isso acontece. <wallet-id> precisa ser o id REAL de uma wallet ja criada (ex.: a do primeiro
+# exemplo acima) - um placeholder literal falha a validacao do envelope (nao e um uuid) e a
+# mensagem e descartada na hora, sem nunca chegar a tentar o Postgres nem a DLQ.
 docker compose stop postgres
 aws --endpoint-url=http://localhost:4566 sqs send-message \
   --queue-url "$QUEUE_URL" \
   --message-group-id "dlq-demo" \
   --message-deduplication-id "msg-dlq-demo-001" \
   --message-body '{"messageId":"msg-dlq-demo-001","type":"WagerTransactionRequested","occurredAt":"2026-07-29T15:00:00.000Z","data":{"providerId":"provider-a","externalTransactionId":"bet-dlq-demo-001","idempotencyKey":"provider-a:bet-dlq-demo-001","playerId":"<uuid>","walletId":"<wallet-id>","roundId":"round-dlq-1","gameId":"fortune-chimp","kind":"BET","money":{"amount":"10.00","currency":"BRL"}}}'
-# esperar ~150s (5 tentativas x 30s de VisibilityTimeout); nos logs da aplicacao, esperado:
-# "[DlqMonitorScheduler] 1 mensagem(ns) detectada(s) em wager-transactions-dlq.fifo - requer auditoria manual"
-sleep 160
-docker compose start postgres
+
+# IMPORTANTE: so reiniciar o Postgres DEPOIS de confirmar a mensagem na DLQ, nunca antes - o SQS
+# so decide mover a mensagem de forma lazy, na tentativa de receive SEGUINTE a esgotar
+# maxReceiveCount (nao no instante exato em que a 5a entrega termina), entao o tempo real passa
+# um pouco de 5 x 30s=150s; reiniciar o Postgres cedo demais deixa essa tentativa seguinte
+# processar a mensagem com sucesso em vez de desvia-la, e ela nunca chega a DLQ.
 DLQ_URL=$(aws --endpoint-url=http://localhost:4566 sqs get-queue-url --queue-name wager-transactions-dlq.fifo --query QueueUrl --output text)
-aws --endpoint-url=http://localhost:4566 sqs receive-message --queue-url "$DLQ_URL" --attribute-names All
-# esperado: a mensagem aparece na DLQ - nunca reprocessada automaticamente (requer auditoria manual)
+for i in $(seq 1 24); do
+  result=$(aws --endpoint-url=http://localhost:4566 sqs receive-message --queue-url "$DLQ_URL" --attribute-names All)
+  if [ -n "$result" ]; then
+    echo "$result"
+    break
+  fi
+  sleep 10
+done
+# esperado (dentro de uns 180-220s): a mensagem aparece acima - nunca reprocessada
+# automaticamente (requer auditoria manual). Nos logs da aplicacao, esperado:
+# "[DlqMonitorScheduler] 1 mensagem(ns) detectada(s) em wager-transactions-dlq.fifo - requer auditoria manual"
+docker compose start postgres
 ```

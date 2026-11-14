@@ -78,4 +78,12 @@ export class AppConfigService {
   get wagerTransactionsDlqName(): string {
     return this.configService.get("WAGER_TRANSACTIONS_DLQ_NAME", { infer: true });
   }
+
+  get pendingReferenceReprocessorPollIntervalMs(): number {
+    return this.configService.get("PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS", { infer: true });
+  }
+
+  get pendingReferenceReprocessorBatchSize(): number {
+    return this.configService.get("PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE", { infer: true });
+  }
 }

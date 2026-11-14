@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
-import { EntityManager } from "@mikro-orm/postgresql";
+import { EntityManager, LockMode } from "@mikro-orm/postgresql";
 import type { WagerTransactionRepository } from "../../application/ports/wager-transaction.repository";
 import type { FailureCode } from "../../domain/failure-code";
 import { Money } from "../../domain/money";
@@ -121,5 +121,23 @@ export class WagerTransactionMikroOrmRepository implements WagerTransactionRepos
   async save(transaction: WagerTransaction): Promise<void> {
     await this.em.upsert(WagerTransactionEntity, wagerTransactionToEntityData(transaction));
     await this.em.flush();
+  }
+
+  async claimPendingReferenceBatch(now: Date, limit: number): Promise<WagerTransaction[]> {
+    // LockMode.PESSIMISTIC_PARTIAL_WRITE -> "FOR UPDATE SKIP LOCKED", mesmo mecanismo de
+    // OutboxMessageMikroOrmRepository.claimPendingBatch - precisa rodar dentro de uma transação já
+    // aberta pelo chamador; o lock dura até ela comitar/abortar. nextAttemptAt nunca é null aqui
+    // (markPendingReference/scheduleReferenceRetry sempre o preenchem junto com attempts), então,
+    // diferente da outbox, não há um ramo "nunca tentado" a considerar.
+    const entities = await this.em.find(
+      WagerTransactionEntity,
+      { status: "PENDING_REFERENCE", nextAttemptAt: { $lte: now } },
+      {
+        orderBy: { nextAttemptAt: "asc" },
+        limit,
+        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+      },
+    );
+    return entities.map(wagerTransactionToDomain);
   }
 }
