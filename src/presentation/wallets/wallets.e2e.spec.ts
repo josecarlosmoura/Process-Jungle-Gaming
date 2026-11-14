@@ -89,6 +89,29 @@ async function getWallet(walletId: string): Promise<{ status: number; body: Wall
   return { status: response.status, body: (await response.json()) as WalletResponseBody };
 }
 
+interface ReconciliationResponseBody {
+  walletId?: string;
+  storedBalance?: MoneyBody;
+  calculatedBalance?: MoneyBody;
+  difference?: MoneyBody;
+  consistent?: boolean;
+  checkedEntries?: number;
+  message?: unknown;
+}
+
+async function postReconciliation(walletId: string): Promise<{ status: number; body: ReconciliationResponseBody }> {
+  const response = await fetch(`${baseUrl}/wallets/${walletId}/reconciliation`, { method: "POST" });
+  return { status: response.status, body: (await response.json()) as ReconciliationResponseBody };
+}
+
+async function getBalanceAmount(walletId: string): Promise<string> {
+  const rows = await connection.execute<{ balance_amount: string }[]>(
+    "select balance_amount from wallets where id = ?",
+    [walletId],
+  );
+  return rows[0]?.balance_amount as string;
+}
+
 async function deleteWalletCascade(walletId: string | undefined): Promise<void> {
   if (!walletId) {
     return;
@@ -547,6 +570,88 @@ describe("GET /wallets/:walletId/ledger", () => {
 
   test("returns 400 for a malformed non-UUID walletId", async () => {
     const { status } = await getLedger("not-a-uuid");
+    expect(status).toBe(400);
+  });
+});
+
+describe("POST /wallets/:walletId/reconciliation", () => {
+  test("returns 200 consistent true with difference 0.00 for a wallet whose balance matches the ledger", async () => {
+    const created = await postWallet({ playerId: randomUUID(), initialBalance: { amount: "1000.00", currency: "BRL" } });
+    const walletId = created.body.id;
+    try {
+      const { status, body } = await postReconciliation(walletId);
+
+      expect(status).toBe(200);
+      expect(body.walletId).toBe(walletId);
+      expect(body.storedBalance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(body.calculatedBalance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(body.difference).toEqual({ amount: "0.00", currency: "BRL" });
+      expect(body.consistent).toBe(true);
+      // A propria criacao da wallet com saldo inicial positivo grava 1 lancamento OPENING.
+      expect(body.checkedEntries).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("an artificial divergence introduced directly in the database is detected, reported with the correct sign, and never auto-corrected", async () => {
+    const created = await postWallet({ playerId: randomUUID(), initialBalance: { amount: "1000.00", currency: "BRL" } });
+    const walletId = created.body.id;
+    try {
+      // Mesmo cenario do "Como validar manualmente" da tarefa original - divergencia artificial
+      // direto no banco, nunca atraves de um endpoint real.
+      await connection.execute("update wallets set balance_amount = balance_amount + 1 where id = ?", [walletId]);
+
+      const { status, body } = await postReconciliation(walletId);
+
+      expect(status).toBe(200);
+      expect(body.consistent).toBe(false);
+      expect(body.storedBalance).toEqual({ amount: "1001.00", currency: "BRL" });
+      expect(body.calculatedBalance).toEqual({ amount: "1000.00", currency: "BRL" });
+      expect(body.difference).toEqual({ amount: "1.00", currency: "BRL" });
+
+      // Nunca corrigida automaticamente - a divergencia permanece exatamente como foi inserida.
+      expect(await getBalanceAmount(walletId)).toBe("1001.00");
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("does not block on a concurrent pessimistic lock held on the same wallet row", async () => {
+    const created = await postWallet({ playerId: randomUUID(), initialBalance: { amount: "1000.00", currency: "BRL" } });
+    const walletId = created.body.id;
+    try {
+      const holderEm = orm.em.fork();
+      const LOCK_HOLD_MS = 300;
+      const lockHeld = holderEm.transactional(async (em) => {
+        await em.getConnection().execute('select * from wallets where id = ? for update', [walletId]);
+        await new Promise((resolve) => setTimeout(resolve, LOCK_HOLD_MS));
+      });
+      // Pequena espera para garantir que o holder ja adquiriu o lock antes de chamar reconciliation.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const start = Date.now();
+      const { status } = await postReconciliation(walletId);
+      const elapsed = Date.now() - start;
+
+      await lockHeld;
+
+      expect(status).toBe(200);
+      // Se a reconciliacao tomasse FOR UPDATE na wallet, ficaria bloqueada ate o holder liberar
+      // o lock (~300ms). Uma leitura sem lock pessimista conclui bem antes disso.
+      expect(elapsed).toBeLessThan(LOCK_HOLD_MS - 50);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("reconciliation returns 404 for a well-formed but unknown walletId", async () => {
+    const { status } = await postReconciliation(randomUUID());
+    expect(status).toBe(404);
+  });
+
+  test("reconciliation returns 400 for a malformed non-UUID walletId", async () => {
+    const { status } = await postReconciliation("not-a-uuid");
     expect(status).toBe(400);
   });
 });

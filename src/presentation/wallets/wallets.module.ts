@@ -15,7 +15,10 @@ import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../../application/ports/out
 import { CreateWalletUseCase } from "../../application/use-cases/create-wallet.use-case";
 import { GetWalletUseCase } from "../../application/use-cases/get-wallet.use-case";
 import { GetWalletLedgerUseCase } from "../../application/use-cases/get-wallet-ledger.use-case";
+import { ReconcileWalletUseCase } from "../../application/use-cases/reconcile-wallet.use-case";
+import { ReconciliationMetrics } from "../../application/reconciliation-metrics";
 import type { WalletLedgerEntryRepository } from "../../application/ports/wallet-ledger-entry.repository";
+import type { WalletRepository } from "../../application/ports/wallet.repository";
 import { WalletsController } from "./wallets.controller";
 
 @Module({
@@ -41,6 +44,24 @@ import { WalletsController } from "./wallets.controller";
         config: AppConfigService,
       ) => new GetWalletLedgerUseCase(getWalletUseCase, ledgerRepository, config.ledgerCursorSecret),
       inject: [GetWalletUseCase, WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE, AppConfigService],
+    },
+    ReconciliationMetrics,
+    {
+      provide: ReconcileWalletUseCase,
+      useFactory: (
+        em: EntityManager,
+        walletRepository: WalletRepository,
+        ledgerRepository: WalletLedgerEntryRepository,
+        metrics: ReconciliationMetrics,
+        config: AppConfigService,
+      ) => new ReconcileWalletUseCase(em, walletRepository, ledgerRepository, metrics, config.ledgerCursorSecret),
+      inject: [
+        EntityManager,
+        WALLET_REPOSITORY_INTERFACE,
+        WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE,
+        ReconciliationMetrics,
+        AppConfigService,
+      ],
     },
   ],
 })

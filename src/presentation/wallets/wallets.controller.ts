@@ -6,6 +6,8 @@ import { CreateWalletUseCase } from "../../application/use-cases/create-wallet.u
 import { GetWalletUseCase } from "../../application/use-cases/get-wallet.use-case";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { GetWalletLedgerUseCase, type GetWalletLedgerResult } from "../../application/use-cases/get-wallet-ledger.use-case";
+// biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
+import { ReconcileWalletUseCase, type ReconcileWalletResult } from "../../application/use-cases/reconcile-wallet.use-case";
 import { Money, type MoneyProps } from "../../domain/money";
 import type { Wallet } from "../../domain/wallet";
 
@@ -78,12 +80,33 @@ function toLedgerResponseBody(result: GetWalletLedgerResult): GetWalletLedgerRes
   };
 }
 
+interface ReconciliationResponseBody {
+  walletId: string;
+  storedBalance: MoneyProps;
+  calculatedBalance: MoneyProps;
+  difference: MoneyProps;
+  consistent: boolean;
+  checkedEntries: number;
+}
+
+function toReconciliationResponseBody(result: ReconcileWalletResult): ReconciliationResponseBody {
+  return {
+    walletId: result.walletId,
+    storedBalance: result.storedBalance.toJSON(),
+    calculatedBalance: result.calculatedBalance.toJSON(),
+    difference: result.difference.toJSON(),
+    consistent: result.consistent,
+    checkedEntries: result.checkedEntries,
+  };
+}
+
 @Controller("wallets")
 export class WalletsController {
   constructor(
     private readonly createWalletUseCase: CreateWalletUseCase,
     private readonly getWalletUseCase: GetWalletUseCase,
     private readonly getWalletLedgerUseCase: GetWalletLedgerUseCase,
+    private readonly reconcileWalletUseCase: ReconcileWalletUseCase,
   ) {}
 
   @Post()
@@ -128,5 +151,17 @@ export class WalletsController {
 
     const result = await this.getWalletLedgerUseCase.execute({ walletId, cursor, limit });
     return toLedgerResponseBody(result);
+  }
+
+  @Post(":walletId/reconciliation")
+  @HttpCode(HttpStatus.OK)
+  async reconciliation(@Param("walletId") walletId: string): Promise<ReconciliationResponseBody> {
+    const parsedWalletId = walletIdParamSchema.safeParse(walletId);
+    if (!parsedWalletId.success) {
+      throw new BadRequestException(`walletId: must be a valid UUID`);
+    }
+
+    const result = await this.reconcileWalletUseCase.execute(walletId);
+    return toReconciliationResponseBody(result);
   }
 }
