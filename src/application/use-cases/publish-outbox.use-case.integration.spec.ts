@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import {
   DeleteMessageCommand,
   GetQueueUrlCommand,
@@ -52,10 +52,6 @@ function runSetupScript(): void {
 runSetupScript();
 const queueUrlResult = await sqsClient.send(new GetQueueUrlCommand({ QueueName: INTEGRATION_EVENTS_QUEUE_NAME }));
 const queueUrl = queueUrlResult.QueueUrl as string;
-// Toda execucao anterior da suite (inclusive de outras tarefas, antes deste worker existir)
-// deixou mensagens reais nesta fila - sem isto, receiveByMarker precisaria vascular um backlog
-// sem limite para achar a mensagem desta execucao. Seguro: fila exclusiva de teste (LocalStack).
-await sqsClient.send(new PurgeQueueCommand({ QueueUrl: queueUrl })).catch(() => {});
 
 // em.transactional() so propaga a transacao via AsyncLocalStorage para outros consumidores do
 // MESMO em quando chamado sobre o em "global" (orm.em) - exatamente o que a injecao de
@@ -91,12 +87,34 @@ async function deleteRow(id: string): Promise<void> {
   await connection.execute("delete from outbox_messages where id = ?", [id]);
 }
 
+// Dentro da suite completa, outras *.integration.spec.ts tambem abrem/fecham pools de conexao
+// contra o mesmo Postgres/LocalStack - um unico execute() pode nao ganhar a corrida do lock
+// (SKIP LOCKED legitimamente cede a linha para outro claim concorrente) ou so terminar de
+// comitar um instante depois do nosso proprio read. "Publicado eventualmente" e exatamente o
+// contrato real do worker (varias instancias, nunca uma garantia de latencia zero) - entao o
+// teste espera por isso em vez de assumir que uma unica chamada basta.
+async function waitForPublishedAt(id: string, timeoutMs = 8_000): Promise<Date> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await makeUseCase().execute();
+    const publishedAt = await readPublishedAt(id);
+    if (publishedAt) {
+      return publishedAt;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`outbox message ${id} was not published within ${timeoutMs}ms`);
+}
+
 // Varias mensagens de outras execucoes podem estar na fila (nunca ha consumer automatico nela
-// ainda) - recebe repetidamente ate achar a que carrega o marcador desta chamada, ou desiste.
+// ainda) - recebe repetidamente ate achar a que carrega o marcador desta chamada, ou o orcamento
+// de tentativas esgota. Uma unica resposta vazia nunca e motivo para desistir: long polling
+// (WaitTimeSeconds) nao garante que a mensagem ja esteja visivel na primeira rodada, sobretudo
+// com o LocalStack sob a carga de uma suite inteira.
 async function receiveByMarker(
   marker: string,
 ): Promise<{ body: Record<string, unknown>; attributes: Record<string, string | undefined> } | null> {
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const response = await sqsClient.send(
       new ReceiveMessageCommand({
         QueueUrl: queueUrl,
@@ -114,9 +132,6 @@ async function receiveByMarker(
       // mensagem de outra execucao/grupo - nunca apagada aqui; so volta a ficar visivel depois
       // do VisibilityTimeout da fila, sem interferir em quem a espera de verdade.
     }
-    if ((response.Messages ?? []).length === 0) {
-      break;
-    }
   }
   return null;
 }
@@ -126,6 +141,17 @@ afterAll(async () => {
 });
 
 describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack reais)", () => {
+  // Outros specs *.integration.spec.ts tambem bootam o AppModule completo (app.e2e.spec.ts,
+  // health.ready*) e o proprio OutboxPublisherScheduler real deles pode publicar mensagens de
+  // verdade nesta mesma fila compartilhada enquanto a suite inteira roda - um purge unico no
+  // carregamento do arquivo nao e suficiente contra esse backlog acumulado entre um teste e o
+  // outro. Purgar antes de CADA teste garante que receiveByMarker so precisa achar a mensagem
+  // que o proprio teste publicou, nao vascular um backlog de tamanho imprevisivel.
+  beforeEach(async () => {
+    await sqsClient.send(new PurgeQueueCommand({ QueueUrl: queueUrl })).catch(() => {});
+  });
+
+
   test("execute publishes a pending message to SQS and marks published_at", async () => {
     const id = randomUUID();
     const aggregateId = randomUUID();
@@ -133,9 +159,7 @@ describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack rea
     try {
       await insertPendingRow(id, aggregateId, marker);
 
-      await makeUseCase().execute();
-
-      const publishedAt = await readPublishedAt(id);
+      const publishedAt = await waitForPublishedAt(id);
       expect(publishedAt).not.toBeNull();
 
       const received = await receiveByMarker(marker);
@@ -153,7 +177,7 @@ describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack rea
     try {
       await insertPendingRow(id, aggregateId, marker);
 
-      await makeUseCase().execute();
+      await waitForPublishedAt(id);
 
       const received = await receiveByMarker(marker);
       expect(received).not.toBeNull();
@@ -176,9 +200,7 @@ describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack rea
       try {
         await insertPendingRow(id, aggregateId, marker);
 
-        await makeUseCase().execute();
-
-        const publishedAt = await readPublishedAt(id);
+        const publishedAt = await waitForPublishedAt(id);
         expect(publishedAt).not.toBeNull();
         const received = await receiveByMarker(marker);
         expect(received).not.toBeNull();
