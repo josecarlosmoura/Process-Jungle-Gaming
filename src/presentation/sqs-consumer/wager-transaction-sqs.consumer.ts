@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from "@nestjs/common";
 import { RequestContext } from "@mikro-orm/core";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
@@ -9,6 +9,7 @@ import { SQSClient } from "@aws-sdk/client-sqs";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ConsumeWagerTransactionMessageUseCase } from "../../application/use-cases/consume-wager-transaction-message.use-case";
 import { isTransientInfrastructureFailure } from "../../domain/domain-error";
+import { LogContextService } from "../../infrastructure/observability/log-context.service";
 import { WAGER_TRANSACTIONS_CONSUMER_NAME } from "../../infrastructure/messaging/queue-names";
 import { parseWagerTransactionRequestedEnvelope, toProcessWagerTransactionCommand } from "./wager-transaction-requested-envelope";
 
@@ -104,6 +105,9 @@ export class WagerTransactionSqsConsumer implements OnApplicationBootstrap, OnMo
         // devolver visibilidade explicitamente (plan.md Assumptions).
         MaxNumberOfMessages: 1,
         WaitTimeSeconds: this.waitTimeSeconds,
+        // Sem isto, o SQS omite MessageAttributes da resposta mesmo quando o produtor os enviou -
+        // o correlationId (T305) nunca chegaria ao consumer.
+        MessageAttributeNames: ["All"],
       }),
       { abortSignal },
     );
@@ -111,6 +115,14 @@ export class WagerTransactionSqsConsumer implements OnApplicationBootstrap, OnMo
   }
 
   private async handleMessage(message: Message): Promise<void> {
+    // correlationId lido do atributo da mensagem (nunca do corpo - e metadado de transporte, nao
+    // payload de negocio) quando o produtor envia um; gerado aqui quando ausente. messageId entra
+    // no contexto so depois do envelope parsear (abaixo), via LogContextService.set().
+    const correlationId = message.MessageAttributes?.correlationId?.StringValue ?? randomUUID();
+    await LogContextService.run({ correlationId }, () => this.processMessage(message));
+  }
+
+  private async processMessage(message: Message): Promise<void> {
     const body = message.Body ?? "";
     let messageId: string;
     let command: ReturnType<typeof toProcessWagerTransactionCommand>;
@@ -124,6 +136,7 @@ export class WagerTransactionSqsConsumer implements OnApplicationBootstrap, OnMo
       // "ack direto" e "deixa redelivery natural tentar de novo", nunca entre categorias do use case).
       const envelope = parseWagerTransactionRequestedEnvelope(body);
       messageId = envelope.messageId;
+      LogContextService.set({ messageId });
       command = toProcessWagerTransactionCommand(envelope);
     } catch (error) {
       if (isTransientInfrastructureFailure(error)) {

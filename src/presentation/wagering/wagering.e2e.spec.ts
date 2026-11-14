@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { INestApplication } from "@nestjs/common";
+import { Writable } from "node:stream";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { Logger, type INestApplication } from "@nestjs/common";
 import { MikroORM } from "@mikro-orm/postgresql";
 import { Test } from "@nestjs/testing";
 
@@ -33,6 +34,8 @@ const { WalletLedgerEntryMikroOrmRepository } = await import("../../infrastructu
 const { OutboxMessageMikroOrmRepository } = await import("../../infrastructure/persistence/outbox-message.repository");
 const { ReferenceResolver } = await import("../../application/reference-resolver");
 const { ReprocessPendingReferenceUseCase } = await import("../../application/use-cases/reprocess-pending-reference.use-case");
+const { correlationIdMiddleware, CORRELATION_ID_HEADER } = await import("../../infrastructure/observability/correlation-id.middleware");
+const { PinoLoggerService } = await import("../../infrastructure/observability/pino-logger.service");
 
 const PORT = 4316;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -71,6 +74,10 @@ function makeReprocessUseCase() {
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [WageringModule] }).compile();
   app = moduleRef.createNestApplication();
+  // Mesma linha que main.ts registra de verdade - sem isto, LogContextService.run() nunca abre
+  // para nenhuma requisicao deste app de teste, e correlationId nunca estaria disponivel para
+  // os logs que ProcessWagerTransactionUseCase emite.
+  app.use(correlationIdMiddleware);
   await app.init();
   await app.listen(PORT);
 });
@@ -145,6 +152,28 @@ async function pendingReferenceMetadataFor(transactionId: string): Promise<Pendi
   return {
     attempts: row?.attempts ?? null,
     nextAttemptAt: row?.next_attempt_at ? new Date(row.next_attempt_at) : null,
+  };
+}
+
+// Captura real via PinoLoggerService (nao um fake de teste) - exercita exatamente o mesmo caminho
+// de producao (LogContextService -> logger.warn/log/error -> PinoLoggerService -> JSON), so
+// trocando o destino de stdout por um stream em memoria.
+function captureLogLines(): { lines: () => Record<string, unknown>[] } {
+  const chunks: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  Logger.overrideLogger(new PinoLoggerService(destination));
+  return {
+    lines: () =>
+      chunks
+        .join("")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line)),
   };
 }
 
@@ -2502,6 +2531,95 @@ describe("GET /providers/:providerId/wagering/transactions/:externalTransactionI
 
       const unknownProvider = await getWagerTransactionByProvider(`provider-${randomUUID()}`, randomUUID());
       expect(unknownProvider.status).toBe(404);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("Logs estruturados e correlationId", () => {
+  afterEach(() => {
+    Logger.overrideLogger(new Logger());
+  });
+
+  function findOutcomeLine(lines: Record<string, unknown>[], transactionId: string): Record<string, unknown> | undefined {
+    return lines.find((line) => line.event === "wager_transaction_outcome" && line.transactionId === transactionId);
+  }
+
+  test("the outcome log carries the same correlationId sent in the X-Correlation-Id header", async () => {
+    const { lines } = captureLogLines();
+    const walletId = await insertWallet("1000.00");
+    try {
+      const response = await fetch(`${baseUrl}/wagering/transactions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `provider-a:${randomUUID()}`,
+          [CORRELATION_ID_HEADER]: "my-fixed-correlation-id",
+        },
+        body: JSON.stringify(betPayload(walletId)),
+      });
+      const body = (await response.json()) as ResponseBody;
+      expect(response.status).toBe(201);
+
+      const outcome = findOutcomeLine(lines(), body.transactionId as string);
+      expect(outcome?.correlationId).toBe("my-fixed-correlation-id");
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("generates a correlationId when the header is absent, and uses it in the outcome log", async () => {
+    const { lines } = captureLogLines();
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status, body } = await postBet(betPayload(walletId), `provider-a:${randomUUID()}`);
+      expect(status).toBe(201);
+
+      const outcome = findOutcomeLine(lines(), body.transactionId as string);
+      const correlationId = outcome?.correlationId as string | undefined;
+      expect(typeof correlationId).toBe("string");
+      expect(correlationId?.length ?? 0).toBeGreaterThan(0);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("the outcome log includes transactionId, walletId and providerId for a PROCESSED BET", async () => {
+    const { lines } = captureLogLines();
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-correlation-test";
+    try {
+      const { status, body } = await postBet(betPayload(walletId, { providerId }), `provider-a:${randomUUID()}`);
+      expect(status).toBe(201);
+
+      const outcome = findOutcomeLine(lines(), body.transactionId as string);
+      expect(outcome?.transactionId).toBe(body.transactionId);
+      expect(outcome?.walletId).toBe(walletId);
+      expect(outcome?.providerId).toBe(providerId);
+      expect(outcome?.status).toBe("PROCESSED");
+      expect(outcome?.level).toBe("info");
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("the outcome log for a REJECTED transaction is a warn with failureCode, and never carries money or the full input payload", async () => {
+    const { lines } = captureLogLines();
+    const walletId = await insertWallet("20.00");
+    try {
+      const { status, body } = await postBet(betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(status).toBe(422);
+
+      const outcome = findOutcomeLine(lines(), body.transactionId as string);
+      expect(outcome?.level).toBe("warn");
+      expect(outcome?.status).toBe("REJECTED");
+      expect(outcome?.failureCode).toBe("INSUFFICIENT_FUNDS");
+
+      const serialized = JSON.stringify(outcome);
+      for (const forbidden of ["money", "amount", "idempotencyKey", "payloadHash", "roundId", "gameId", "externalTransactionId"]) {
+        expect(serialized.includes(`"${forbidden}"`)).toBe(false);
+      }
     } finally {
       await deleteWalletCascade(walletId);
     }

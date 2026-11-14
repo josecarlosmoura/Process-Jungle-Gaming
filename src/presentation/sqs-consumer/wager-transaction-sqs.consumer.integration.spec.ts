@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { Writable } from "node:stream";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { Logger } from "@nestjs/common";
 import {
   CreateQueueCommand,
   DeleteMessageCommand,
@@ -53,6 +55,7 @@ const { WalletMikroOrmRepository } = await import("../../infrastructure/persiste
 const { WAGER_TRANSACTIONS_CONSUMER_NAME } = await import("../../infrastructure/messaging/queue-names");
 const { TransientInfrastructureError } = await import("../../domain/domain-error");
 const { EntityManager } = await import("@mikro-orm/postgresql");
+const { PinoLoggerService } = await import("../../infrastructure/observability/pino-logger.service");
 
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
@@ -423,6 +426,130 @@ describe("WagerTransactionSqsConsumer - integração (Postgres + LocalStack reai
         await deleteInboxRow(businessMessageId);
         await deleteWalletCascade(walletId);
         await firstModuleRef.close();
+      }
+    },
+    20_000,
+  );
+});
+
+function captureLogLines(): { lines: () => Record<string, unknown>[] } {
+  const chunks: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  Logger.overrideLogger(new PinoLoggerService(destination));
+  return {
+    lines: () =>
+      chunks
+        .join("")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line)),
+  };
+}
+
+function wagerTransactionRequestedBodyWithId(messageId: string, walletId: string, idSuffix: string): string {
+  return JSON.stringify({
+    messageId,
+    type: "WagerTransactionRequested",
+    occurredAt: new Date().toISOString(),
+    data: {
+      providerId: "provider-a",
+      externalTransactionId: `bet-sqs-${idSuffix}`,
+      idempotencyKey: `provider-a:bet-sqs-${idSuffix}`,
+      playerId: randomUUID(),
+      walletId,
+      roundId: "round-sqs-1",
+      gameId: "fortune-chimp",
+      kind: "BET",
+      money: { amount: "15.00", currency: "BRL" },
+    },
+  });
+}
+
+describe("WagerTransactionSqsConsumer - correlationId (Postgres + LocalStack reais)", () => {
+  afterEach(() => {
+    Logger.overrideLogger(new Logger());
+  });
+
+  test(
+    "a message with a correlationId MessageAttribute propagates it into the outcome log, together with messageId",
+    async () => {
+      const moduleRef = await Test.createTestingModule({ imports: [SqsConsumerModule] }).compile();
+      const consumer = moduleRef.get(WagerTransactionSqsConsumer);
+      const walletId = await insertWallet("1000.00");
+      const businessMessageId = `biz-corr-${randomUUID()}`;
+      // Depois de compile() de proposito - @nestjs/testing reseta o logger global ao compilar o
+      // modulo (silencia logs de inicializacao), o que desfaria um override anterior.
+      const { lines } = captureLogLines();
+
+      try {
+        consumer.onApplicationBootstrap();
+
+        await sqsClient.send(
+          new SendMessageCommand({
+            QueueUrl: queueUrl,
+            MessageGroupId: walletId,
+            MessageDeduplicationId: `dedup-corr-${businessMessageId}`,
+            MessageBody: wagerTransactionRequestedBodyWithId(businessMessageId, walletId, businessMessageId),
+            MessageAttributes: {
+              correlationId: { DataType: "String", StringValue: "sqs-fixed-correlation-id" },
+            },
+          }),
+        );
+        await waitForBalance(walletId, "985.00");
+
+        const outcome = lines().find(
+          (line) => line.event === "wager_transaction_outcome" && line.correlationId === "sqs-fixed-correlation-id",
+        );
+        expect(outcome).toBeDefined();
+        expect(outcome?.messageId).toBe(businessMessageId);
+      } finally {
+        await consumer.onModuleDestroy();
+        await deleteInboxRow(businessMessageId);
+        await deleteWalletCascade(walletId);
+        await moduleRef.close();
+      }
+    },
+    20_000,
+  );
+
+  test(
+    "a message with no correlationId MessageAttribute still gets one generated, used consistently in the outcome log",
+    async () => {
+      const moduleRef = await Test.createTestingModule({ imports: [SqsConsumerModule] }).compile();
+      const consumer = moduleRef.get(WagerTransactionSqsConsumer);
+      const walletId = await insertWallet("1000.00");
+      const businessMessageId = `biz-nocorr-${randomUUID()}`;
+      const { lines } = captureLogLines();
+
+      try {
+        consumer.onApplicationBootstrap();
+
+        await sqsClient.send(
+          new SendMessageCommand({
+            QueueUrl: queueUrl,
+            MessageGroupId: walletId,
+            MessageDeduplicationId: `dedup-nocorr-${businessMessageId}`,
+            MessageBody: wagerTransactionRequestedBodyWithId(businessMessageId, walletId, businessMessageId),
+          }),
+        );
+        await waitForBalance(walletId, "985.00");
+
+        const outcome = lines().find(
+          (line) => line.event === "wager_transaction_outcome" && line.messageId === businessMessageId,
+        );
+        const correlationId = outcome?.correlationId as string | undefined;
+        expect(typeof correlationId).toBe("string");
+        expect(correlationId?.length ?? 0).toBeGreaterThan(0);
+      } finally {
+        await consumer.onModuleDestroy();
+        await deleteInboxRow(businessMessageId);
+        await deleteWalletCascade(walletId);
+        await moduleRef.close();
       }
     },
     20_000,

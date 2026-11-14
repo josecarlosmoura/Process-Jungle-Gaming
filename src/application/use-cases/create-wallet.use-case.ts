@@ -5,6 +5,7 @@ import { EntityManager, UniqueConstraintViolationException } from "@mikro-orm/po
 import { WagerTransactionProcessed } from "../../domain/events/wager-transaction-processed";
 import { WalletBalanceChanged } from "../../domain/events/wallet-balance-changed";
 import type { EventContext } from "../../domain/integration-event";
+import { LogContextService } from "../../infrastructure/observability/log-context.service";
 import { Money } from "../../domain/money";
 import { OutboxMessage } from "../../domain/outbox-message";
 import { Wallet, WalletAlreadyExistsError } from "../../domain/wallet";
@@ -68,7 +69,10 @@ export class CreateWalletUseCase {
     await this.walletRepository.save(wallet);
 
     if (command.initialBalance.isPositive()) {
-      const ctx: EventContext = { correlationId: randomUUID(), occurredAt: new Date() };
+      const ctx: EventContext = {
+        correlationId: LogContextService.get().correlationId ?? randomUUID(),
+        occurredAt: new Date(),
+      };
       await this.openWithInitialBalance(wallet, command.initialBalance, ctx);
     }
 

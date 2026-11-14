@@ -77,14 +77,18 @@ export class ReconcileWalletUseCase {
     const consistent = difference.isZero();
 
     if (!consistent) {
+      // Objeto fundido pelo PinoLoggerService (T305), nunca JSON.stringify como string da
+      // mensagem - isso dobraria a serializacao (o JSON inteiro apareceria escapado dentro de
+      // "msg" em vez de como campos de primeiro nivel da linha).
       this.logger.error(
-        JSON.stringify({
+        {
           event: "wallet_reconciliation_divergence",
           walletId,
           storedBalance: wallet.balance.toJSON(),
           calculatedBalance: calculatedBalance.toJSON(),
           difference: difference.toJSON(),
-        }),
+        },
+        "wallet reconciliation divergence detected",
       );
       this.reconciliationMetrics.recordDivergence();
     }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { EntityManager } from "@mikro-orm/postgresql";
 import { WagerTransactionProcessed } from "../../domain/events/wager-transaction-processed";
@@ -9,6 +9,7 @@ import type { EventContext, IntegrationEvent } from "../../domain/integration-ev
 import { OutboxMessage } from "../../domain/outbox-message";
 import type { ReversalKind, WagerTransaction } from "../../domain/wager-transaction";
 import { WalletNotFoundError } from "../../domain/wallet";
+import { LogContextService } from "../../infrastructure/observability/log-context.service";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
 import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../ports/outbox-message.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
@@ -23,6 +24,8 @@ import { REFUND_ACCEPTANCE_RULES, ROLLBACK_ACCEPTANCE_RULES, applyResolvedRevers
 
 @Injectable()
 export class ReprocessPendingReferenceUseCase {
+  private readonly logger = new Logger(ReprocessPendingReferenceUseCase.name);
+
   constructor(
     private readonly em: EntityManager,
     @Inject(WALLET_REPOSITORY_INTERFACE) private readonly walletRepository: WalletRepository,
@@ -49,7 +52,14 @@ export class ReprocessPendingReferenceUseCase {
       // que, por acaso, compartilhem duas ou mais wallets em comum.
       const ordered = [...batch].sort((a, b) => a.walletId.localeCompare(b.walletId));
       for (const transaction of ordered) {
-        await this.reprocess(transaction, now);
+        // Cada tentativa de reprocessamento e sua propria operacao (nao a mesma requisicao
+        // original que levou a PENDING_REFERENCE) - correlationId novo por tentativa, mas um so
+        // valor para toda ela: lido de volta por reprocess() para o EventContext publicado, nunca
+        // gerado uma segunda vez (AC8 - nunca dois valores diferentes para a mesma tentativa).
+        await LogContextService.run(
+          { correlationId: randomUUID(), walletId: transaction.walletId, transactionId: transaction.id },
+          () => this.reprocess(transaction, now),
+        );
       }
     });
   }
@@ -67,7 +77,9 @@ export class ReprocessPendingReferenceUseCase {
       throw new WalletNotFoundError(transaction.walletId);
     }
 
-    const ctx: EventContext = { correlationId: randomUUID(), occurredAt: now };
+    // LogContextService.run() em execute() ja garante um correlationId presente - o fallback
+    // randomUUID() so cobre quem chama reprocess() direto (ex.: um teste de unidade sem run()).
+    const ctx: EventContext = { correlationId: LogContextService.get().correlationId ?? randomUUID(), occurredAt: now };
     // claimPendingReferenceBatch só devolve PENDING_REFERENCE, que só existe para REFUND/ROLLBACK
     // (markPendingReference só é chamado por processRefund/processRollback) - o cast é seguro.
     const reversalKind = transaction.kind as ReversalKind;
@@ -90,6 +102,10 @@ export class ReprocessPendingReferenceUseCase {
         transaction.reject("REFERENCE_NOT_FOUND");
         await this.wagerTransactionRepository.save(transaction);
         await this.enqueue(WagerTransactionRejected.from(transaction, ctx));
+        this.logger.warn(
+          { event: "pending_reference_reprocess_outcome", status: "REJECTED", failureCode: "REFERENCE_NOT_FOUND" },
+          "pending reference reprocessing rejected",
+        );
         return;
       }
       transaction.scheduleReferenceRetry(now);
@@ -103,6 +119,10 @@ export class ReprocessPendingReferenceUseCase {
     if (effect.outcome === "REJECTED") {
       await this.wagerTransactionRepository.save(transaction);
       await this.enqueue(WagerTransactionRejected.from(transaction, ctx));
+      this.logger.warn(
+        { event: "pending_reference_reprocess_outcome", status: "REJECTED", failureCode: effect.failureCode },
+        "pending reference reprocessing rejected",
+      );
       return;
     }
 
@@ -110,6 +130,7 @@ export class ReprocessPendingReferenceUseCase {
     await this.walletLedgerEntryRepository.save(effect.ledgerEntry);
     await this.enqueue(WagerTransactionProcessed.from(transaction, wallet.balance.toJSON(), ctx));
     await this.enqueue(WalletBalanceChanged.from(wallet, effect.ledgerEntry, ctx));
+    this.logger.log({ event: "pending_reference_reprocess_outcome", status: "PROCESSED" }, "pending reference reprocessed");
     await this.walletRepository.save(wallet);
   }
 

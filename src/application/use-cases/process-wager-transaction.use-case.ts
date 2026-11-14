@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { DriverException, EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { PayloadValidationError, ResourceConflictError, TransientInfrastructureError } from "../../domain/domain-error";
@@ -14,6 +14,7 @@ import { OutboxMessage } from "../../domain/outbox-message";
 import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../domain/wallet";
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
+import { LogContextService } from "../../infrastructure/observability/log-context.service";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ReferenceResolver } from "../reference-resolver";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
@@ -78,6 +79,8 @@ const SUPPORTED_KINDS: ReadonlySet<string> = new Set(["BET", "WIN", "LOSS", "REF
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
+  private readonly logger = new Logger(ProcessWagerTransactionUseCase.name);
+
   constructor(
     private readonly em: EntityManager,
     @Inject(WALLET_REPOSITORY_INTERFACE) private readonly walletRepository: WalletRepository,
@@ -101,8 +104,13 @@ export class ProcessWagerTransactionUseCase {
     // vencedora sem precisar recalcular o hash dentro de uma transacao ja abortada.
     const kind = command.kind as WagerTransactionKind;
     const payloadHash = computeWagerTransactionPayloadHash({ ...command, kind });
+    // Conhecidos desde a borda, independente de qual ramo abaixo decide o desfecho - set() nunca
+    // abre um escopo novo, so enriquece o LogContextService.run() que o controller/consumer ja
+    // abriu (ou e um no-op silencioso quando chamado direto, ex.: um teste de unidade).
+    LogContextService.set({ walletId: command.walletId, providerId: command.providerId });
+    let result: ProcessWagerTransactionResult;
     try {
-      return await this.em.transactional(() => this.process(command, kind, payloadHash));
+      result = await this.em.transactional(() => this.process(command, kind, payloadHash));
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
         // Corrida na criacao: a linha vencedora ja esta commitada por quem ganhou a corrida de
@@ -112,13 +120,39 @@ export class ProcessWagerTransactionUseCase {
         // colidiram na mesma Idempotency-Key.
         const existing = await this.wagerTransactionRepository.findByIdempotencyKey(command.idempotencyKey);
         if (existing) {
-          return this.resolveExisting(existing, payloadHash);
+          result = await this.resolveExisting(existing, payloadHash);
+          this.logOutcome(result);
+          return result;
         }
       }
       if (error instanceof DriverException && (error as DriverException).code === LOCK_NOT_AVAILABLE_SQLSTATE) {
         throw new LockAcquisitionTimeoutError(command.walletId);
       }
       throw error;
+    }
+    this.logOutcome(result);
+    return result;
+  }
+
+  // Unico ponto que loga o desfecho de um execute() - nunca espalhado pelos varios metodos
+  // privados que decidem PROCESSED/REJECTED/PENDING_REFERENCE, para nao arriscar um retorno novo
+  // esquecer de logar. Nunca inclui "money"/"balance" (RNF-11/RNF-13) - so identificadores
+  // (via LogContextService, fundidos automaticamente pelo PinoLoggerService) e metadados de
+  // decisao (status, failureCode).
+  private logOutcome(result: ProcessWagerTransactionResult): void {
+    LogContextService.set({ transactionId: result.transactionId });
+    const fields = {
+      event: "wager_transaction_outcome",
+      status: result.status,
+      idempotentReplay: result.idempotentReplay,
+      ...(result.failureCode ? { failureCode: result.failureCode } : {}),
+    };
+    if (result.status === "REJECTED") {
+      this.logger.warn(fields, "wager transaction rejected");
+    } else if (result.status === "FAILED") {
+      this.logger.error(fields, "wager transaction failed");
+    } else {
+      this.logger.log(fields, "wager transaction processed");
     }
   }
 
@@ -144,10 +178,10 @@ export class ProcessWagerTransactionUseCase {
       throw new WalletNotFoundError(command.walletId);
     }
 
-    // Um correlationId novo por chamada - nem este caso de uso nem o worker de entrada (HTTP hoje,
-    // SQS em T210) ainda propagam um id de correlação de borda, então gerar aqui é o único ponto
-    // de entrada disponível (ARCHITECTURE.md secao 12 cobre a propagação real como trabalho futuro).
-    const ctx: EventContext = { correlationId: randomUUID(), occurredAt: new Date() };
+    // Le o correlationId que a borda (HTTP/SQS) ja estabeleceu via LogContextService.run() -
+    // randomUUID() so como rede de seguranca para quem chama execute() sem ter passado por
+    // nenhuma borda (ex.: um teste de unidade direto).
+    const ctx: EventContext = { correlationId: LogContextService.get().correlationId ?? randomUUID(), occurredAt: new Date() };
 
     const transaction = WagerTransaction.create({
       id: randomUUID(),
@@ -163,6 +197,7 @@ export class ProcessWagerTransactionUseCase {
       money: command.money,
       referenceExternalTransactionId: command.referenceExternalTransactionId,
     });
+    LogContextService.set({ transactionId: transaction.id });
 
     if (!transaction.affectsBalance()) {
       return this.processWithoutBalanceEffect(transaction, wallet, ctx);

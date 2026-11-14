@@ -13,14 +13,14 @@ import { LEDGER_PAGE_SIZE, ReconcileWalletUseCase } from "./reconcile-wallet.use
 
 const SECRET = "test-secret";
 
-let errors: string[] = [];
+let errors: unknown[] = [];
 
 beforeEach(() => {
   errors = [];
   Logger.overrideLogger({
     log: () => {},
     error: (message: unknown) => {
-      errors.push(String(message));
+      errors.push(message);
     },
     warn: () => {},
     debug: () => {},
@@ -131,7 +131,7 @@ describe("ReconcileWalletUseCase", () => {
     await useCase.execute("wallet-1");
 
     expect(errors.length).toBe(1);
-    const logged = JSON.parse(errors[0] as string);
+    const logged = errors[0] as Record<string, unknown>;
     expect(logged.walletId).toBe("wallet-1");
     expect(logged.storedBalance).toEqual({ amount: "101.00", currency: "BRL" });
     expect(logged.calculatedBalance).toEqual({ amount: "100.00", currency: "BRL" });

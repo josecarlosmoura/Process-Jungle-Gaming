@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "bun:test";
+import { ConsoleLogger, Logger } from "@nestjs/common";
 import type { EntityManager } from "@mikro-orm/postgresql";
 import { Money } from "../../domain/money";
 import type { OutboxMessage } from "../../domain/outbox-message";
 import { WagerTransaction } from "../../domain/wager-transaction";
 import { Wallet } from "../../domain/wallet";
+import { LogContextService } from "../../infrastructure/observability/log-context.service";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
 import type { WalletLedgerEntryRepository } from "../ports/wallet-ledger-entry.repository";
@@ -162,5 +164,43 @@ describe("ReprocessPendingReferenceUseCase", () => {
     expect(transaction.failureCode).toBe("REFERENCE_NOT_FOUND");
     expect(transaction.attempts).toBe(WagerTransaction.MAX_PENDING_REFERENCE_ATTEMPTS);
     expect(outbox.saved).toHaveLength(1);
+  });
+
+  test("the correlationId logged for a rejected attempt is the exact same one published in its WagerTransactionRejected event", async () => {
+    const transaction = aPendingReferenceTransaction("wallet-a", { attempts: WagerTransaction.MAX_PENDING_REFERENCE_ATTEMPTS });
+    const wagerTransactionRepository = fakeWagerTransactionRepository();
+    wagerTransactionRepository.claimPendingReferenceBatch = async () => [transaction];
+    const outbox = fakeOutboxMessageRepository();
+
+    const loggedCorrelationIds: Array<string | undefined> = [];
+    Logger.overrideLogger({
+      log: () => {},
+      error: () => {},
+      warn: () => {
+        loggedCorrelationIds.push(LogContextService.get().correlationId);
+      },
+      debug: () => {},
+      verbose: () => {},
+    });
+    try {
+      const useCase = new ReprocessPendingReferenceUseCase(
+        fakeEntityManager(),
+        trackingWalletRepository([]),
+        wagerTransactionRepository,
+        fakeWalletLedgerEntryRepository(),
+        outbox,
+        fakeReferenceResolver("NOT_FOUND"),
+        20,
+      );
+
+      await useCase.execute();
+    } finally {
+      Logger.overrideLogger(new ConsoleLogger());
+    }
+
+    expect(loggedCorrelationIds).toHaveLength(1);
+    const published = outbox.saved[0]?.payload as { correlationId?: string } | undefined;
+    expect(published?.correlationId).toBeDefined();
+    expect(loggedCorrelationIds[0]).toBe(published?.correlationId);
   });
 });
