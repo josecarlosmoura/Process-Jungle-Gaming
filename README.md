@@ -9,6 +9,13 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
 - `POST /wallets` — cria uma wallet para `playerId`+`currency`; saldo inicial positivo gera uma
   transação interna `OPENING` com lançamento `CREDIT` no ledger, na mesma transação SQL.
 - `GET /wallets/:walletId` — consulta saldo, moeda e versão atuais.
+- `GET /wallets/:walletId/ledger?cursor=&limit=` — lista os lançamentos (`WalletLedgerEntry`) da
+  wallet, ordenados por `createdAt` ascendente (desempate por `id`). `limit` default `50`, acima de
+  `200` é clampado (nunca rejeitado); abaixo de `1` ou não-inteiro responde `400`. `cursor` é opaco
+  e assinado (HMAC-SHA256) — nunca um `OFFSET` disfarçado, então uma inserção concorrente entre duas
+  chamadas de paginação não repete nem pula itens. `nextCursor` vem preenchido em toda página não
+  vazia (mesmo a última, parcial) — o cliente só descobre o fim ao receber uma página vazia.
+  `404` para wallet inexistente, `400` para `walletId`/`cursor` inválidos.
 - `POST /wagering/transactions` (header `Idempotency-Key` obrigatório) — processa `kind: "BET"`,
   `"WIN"`, `"LOSS"`, `"REFUND"` e `"ROLLBACK"`:
   - `BET`: débito do saldo com lock pessimista por `walletId`, rejeição auditável por saldo
@@ -151,6 +158,11 @@ curl -i http://localhost:3000/wagering/transactions/<transaction-id-da-bet>
 
 # mesma consulta, agora pela chave de negocio do provedor (sem precisar do id interno)
 curl -i http://localhost:3000/providers/provider-a/wagering/transactions/bet-001
+
+# lista o ledger da wallet paginado (o lancamento DEBIT da BET acima aparece aqui)
+curl -s "http://localhost:3000/wallets/<wallet-id>/ledger?limit=2" | tee /tmp/page1.json
+CURSOR=$(jq -r '.nextCursor' /tmp/page1.json)
+curl -s "http://localhost:3000/wallets/<wallet-id>/ledger?cursor=$CURSOR&limit=2"
 
 # processa um WIN referenciando a BET acima (credita a wallet)
 curl -s -X POST http://localhost:3000/wagering/transactions \
