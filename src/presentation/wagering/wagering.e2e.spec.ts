@@ -219,6 +219,14 @@ async function getWagerTransaction(transactionId: string): Promise<{ status: num
   return { status: response.status, body: (await response.json()) as GetResponseBody };
 }
 
+async function getWagerTransactionByProvider(
+  providerId: string,
+  externalTransactionId: string,
+): Promise<{ status: number; body: GetResponseBody }> {
+  const response = await fetch(`${baseUrl}/providers/${providerId}/wagering/transactions/${externalTransactionId}`);
+  return { status: response.status, body: (await response.json()) as GetResponseBody };
+}
+
 describe("POST /wagering/transactions - header Idempotency-Key ausente", () => {
   test("POST /wagering/transactions without the Idempotency-Key header returns 400 and persists no WagerTransaction", async () => {
     const walletId = await insertWallet("1000.00");
@@ -2454,6 +2462,46 @@ describe("GET /wagering/transactions/:transactionId", () => {
       expect(pendingReference.status).toBe(202);
       const pendingReferenceGet = await getWagerTransaction(pendingReference.body.transactionId as string);
       expect(Object.keys(pendingReferenceGet.body).sort()).toEqual(["kind", "money", "status"]);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("GET /providers/:providerId/wagering/transactions/:externalTransactionId", () => {
+  test("returns 200 with the same body GET /wagering/transactions/:transactionId returns for the same transaction", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    const externalTransactionId = randomUUID();
+    try {
+      const bet = await postBet(
+        betPayload(walletId, { providerId, externalTransactionId, money: { amount: "25.00", currency: "BRL" } }),
+        `provider-a:${randomUUID()}`,
+      );
+      expect(bet.status).toBe(201);
+
+      const byId = await getWagerTransaction(bet.body.transactionId as string);
+      const byProvider = await getWagerTransactionByProvider(providerId, externalTransactionId);
+
+      expect(byProvider.status).toBe(200);
+      expect(byProvider.body).toEqual(byId.body);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("returns 404 for a combination that does not exist", async () => {
+    const walletId = await insertWallet("1000.00");
+    const providerId = "provider-a";
+    try {
+      const bet = await postBet(betPayload(walletId, { providerId }), `provider-a:${randomUUID()}`);
+      expect(bet.status).toBe(201);
+
+      const unknownExternalId = await getWagerTransactionByProvider(providerId, randomUUID());
+      expect(unknownExternalId.status).toBe(404);
+
+      const unknownProvider = await getWagerTransactionByProvider(`provider-${randomUUID()}`, randomUUID());
+      expect(unknownProvider.status).toBe(404);
     } finally {
       await deleteWalletCascade(walletId);
     }

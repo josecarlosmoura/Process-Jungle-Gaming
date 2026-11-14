@@ -14,12 +14,14 @@ import { WALLET_LEDGER_ENTRY_REPOSITORY_INTERFACE } from "../../application/port
 import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../../application/ports/outbox-message.repository";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
 import { GetWagerTransactionUseCase } from "../../application/use-cases/get-wager-transaction.use-case";
+import { GetWagerTransactionByProviderUseCase } from "../../application/use-cases/get-wager-transaction-by-provider.use-case";
 import { ReferenceResolver } from "../../application/reference-resolver";
 import { WageringController } from "./wagering.controller";
+import { ProviderWagerTransactionsController } from "./provider-wager-transactions.controller";
 
 @Module({
   imports: [DatabaseModule, AppConfigModule, DomainErrorHandlingModule],
-  controllers: [WageringController],
+  controllers: [WageringController, ProviderWagerTransactionsController],
   providers: [
     { provide: WALLET_REPOSITORY_INTERFACE, useClass: WalletMikroOrmRepository },
     { provide: WAGER_TRANSACTION_REPOSITORY_INTERFACE, useClass: WagerTransactionMikroOrmRepository },
@@ -33,6 +35,7 @@ import { WageringController } from "./wagering.controller";
     ReferenceResolver,
     ProcessWagerTransactionUseCase,
     GetWagerTransactionUseCase,
+    GetWagerTransactionByProviderUseCase,
   ],
   // SqsConsumerModule precisa injetar literalmente esta mesma instancia - nunca reconstruir o
   // provider com sua propria fiacao de repositorios (CLAUDE.md: "reutilizando EXATAMENTE o mesmo

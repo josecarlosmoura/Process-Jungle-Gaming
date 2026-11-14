@@ -91,6 +91,13 @@ export class WagerTransactionNotFoundError extends ResourceNotFoundError {
   }
 }
 
+export class WagerTransactionNotFoundByProviderError extends ResourceNotFoundError {
+  constructor(providerId: string, externalTransactionId: string) {
+    super(`WagerTransaction for providerId "${providerId}" and externalTransactionId "${externalTransactionId}" was not found`);
+    this.name = "WagerTransactionNotFoundByProviderError";
+  }
+}
+
 export class WagerTransaction {
   // Primeiro passo do backoff exponencial de ARCHITECTURE.md secao 8 ("ex.: 1min, 2min, 4min...
   // ate 30min") - usado tanto pelo valor inicial (markPendingReference) quanto como base da

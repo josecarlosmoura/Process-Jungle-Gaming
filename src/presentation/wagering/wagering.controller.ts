@@ -53,7 +53,7 @@ interface ProcessWagerTransactionResponseBody {
 
 const transactionIdParamSchema = z.string().uuid();
 
-interface GetWagerTransactionResponseBody {
+export interface GetWagerTransactionResponseBody {
   status: string;
   kind: string;
   money: MoneyProps;
