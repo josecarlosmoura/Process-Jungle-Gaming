@@ -2663,6 +2663,12 @@ describe("Métricas (Prometheus)", () => {
       const text = await MetricsService.getMetricsText();
       expect(readMetricValue(text, "wager_transactions_total", { status: "PROCESSED", kind: "BET" })).toBe(1);
       expect(readMetricValue(text, "wager_transaction_duration_seconds_count")).toBe(1);
+      // _count por si so so prova que observe() foi chamado - incrementa mesmo com um valor 0 ou
+      // negativo. _sum > 0 e quem prova que o valor observado e de fato uma duracao real
+      // (achado do Verifier).
+      const durationSum = readMetricValue(text, "wager_transaction_duration_seconds_sum");
+      expect(durationSum).toBeDefined();
+      expect(durationSum as number).toBeGreaterThan(0);
     } finally {
       await deleteWalletCascade(walletId);
     }
