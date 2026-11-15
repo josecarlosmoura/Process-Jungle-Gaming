@@ -1,9 +1,13 @@
 # Uso exclusivo da suite de testes de concorrencia (T214) - sobe postgres/localstack (herdados de
-# docker-compose.yml via "include") mais N replicas reais da propria aplicacao, para o cenario
+# docker-compose.infra.yml via "include") mais N replicas reais da propria aplicacao, para o cenario
 # obrigatorio de 3+ instancias. Nunca usar simultaneamente com "docker compose up" (docker-compose.yml
 # sozinho) - os dois sobem os mesmos nomes de container/volume para postgres/localstack.
+# Inclui docker-compose.infra.yml (nao docker-compose.yml) porque "include" nao permite redefinir
+# um servico que o arquivo incluido ja declara (T307) - docker-compose.yml, a partir de T307,
+# acrescenta seus proprios "migrate"/"app-1"/"app-2"/"app-3"/"nginx" por cima dessa mesma infra,
+# que colidiriam com os equivalentes de teste abaixo.
 include:
-  - docker-compose.yml
+  - docker-compose.infra.yml
 
 services:
   # One-shot: roda as migrations uma unica vez antes de qualquer replica de "app" iniciar. Nunca
@@ -14,6 +18,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Estagio "build" (T307) - unico que ainda tem ts-node/@mikro-orm/cli e o codigo-fonte
+      # TypeScript; o estagio final "runtime" (usado por "app" abaixo) nao tem nenhum dos dois.
+      target: build
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"

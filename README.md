@@ -128,13 +128,32 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
 
 ## Setup local
 
+Duas formas de rodar o projeto — escolha uma:
+
+**A. Desenvolvimento (um único processo, hot-reload):**
+
 ```bash
 cp .env.example .env               # ajuste se necessário; valores default já funcionam localmente
 bun install
-docker compose up -d               # Postgres + LocalStack (filas SQS) + SQS Admin (UI em http://localhost:3999)
+docker compose -f docker-compose.infra.yml up -d   # Postgres + LocalStack (filas SQS) + SQS Admin (UI em http://localhost:3999)
 bun run migration:up
 bun run start:dev                  # sobe a API em http://localhost:3000
 ```
+
+**B. Ambiente completo (igual ao que um avaliador externo usa — 3 réplicas reais da aplicação
+atrás de um nginx, RF-16/RNF-08):**
+
+```bash
+cp .env.example .env               # ajuste se necessário
+docker compose up -d --build       # Postgres + LocalStack + migrations + app-1/app-2/app-3 + nginx
+docker compose ps                  # confirma os 9 serviços saudáveis (2 one-shot "Exited (0)")
+curl -s http://localhost/health/ready   # porta pública do nginx (${NGINX_PORT:-80})
+```
+
+Cada requisição ao nginx é repassada em round-robin para `app-1`/`app-2`/`app-3`; a resposta carrega
+o header `X-Upstream-Addr` com a réplica que de fato respondeu (`curl -i` para ver os headers). Os
+workers de fundo (Outbox Publisher, Pending-Reference Reprocessor, DLQ Monitor, consumer SQS) rodam
+nas 3 réplicas — não existe um serviço "worker" separado.
 
 ## Comandos
 
@@ -159,6 +178,12 @@ docker compose -f docker-compose.test.yml up -d --scale app=3
 bun run test:concurrency
 docker compose -f docker-compose.test.yml down
 ```
+
+Esse arquivo (`docker-compose.test.yml`) é só para a suíte automatizada acima — descobre a porta
+de host de cada réplica (`docker compose port --index <n> app 3000`) e fala direto com elas, sem
+load balancer. Para repetir manualmente o mesmo tipo de cenário (2 `BET`s em paralelo, 50 POSTs
+idênticos) contra o ambiente final com nginx, use o setup B da seção "Setup local" acima e aponte
+para `http://localhost:${NGINX_PORT:-80}` em vez de uma réplica direta.
 
 Sempre use `bun run test`/`test:*` (nunca `bun test` direto): vários specs mutam `process.env`
 e fazem `import()` dinâmico do `AppModule` para simular dependências fora do ar (ex.: Postgres
