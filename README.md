@@ -117,6 +117,14 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   desfecho de cada transação (`PROCESSED`/`REJECTED`/`PENDING_REFERENCE`/`FAILED`) inclui
   `correlationId`, `transactionId`, `walletId` e `providerId` — nunca `money`/o payload de entrada
   inteiro.
+- `GET /metrics` — métricas Prometheus (`prom-client`, sem autenticação, mesmo nível dos health
+  checks): `wager_transactions_total{status,kind}`, `wager_transaction_duration_seconds`,
+  `idempotency_duplicates_total{channel}` (`http`/`inbox_sqs`), `retries_total` (outbox + reprocessador
+  de referência pendente), `dlq_messages_total` (delta de polling do `DlqMonitorScheduler`, nunca
+  consumindo a fila), `lock_wait_timeout_total`, e `outbox_lag_seconds` (Gauge, amostrado por um
+  **ciclo de tempo próprio e independente** do Outbox Publisher Worker — continua subindo mesmo com o
+  publisher pausado). Nenhuma métrica tem label de alta cardinalidade (nunca `playerId`/`walletId`/
+  `transactionId`) nem influencia o resultado de nenhum caso de uso — são estritamente observacionais.
 
 ## Setup local
 
@@ -178,6 +186,9 @@ curl -s -X POST http://localhost:3000/wagering/transactions \
 grep '"correlationId":"minha-trace-001"' /tmp/app.log | jq .
 # esperado: uma linha JSON com event=wager_transaction_outcome, status=PROCESSED,
 # transactionId/walletId/providerId preenchidos - nunca "money" nem o payload de entrada inteiro
+
+# confere as metricas Prometheus (a BET acima ja incrementou wager_transactions_total)
+curl -s http://localhost:3000/metrics | grep -E "wager_transactions_total|idempotency_duplicates_total|outbox_lag|dlq_messages_total"
 
 # consulta a BET acima pelo id interno (transactionId devolvido no POST acima)
 curl -i http://localhost:3000/wagering/transactions/<transaction-id-da-bet>
