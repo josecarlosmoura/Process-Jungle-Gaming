@@ -1,0 +1,7 @@
+# Scripts rodados dentro de containers Linux (volume mount ou COPY) nunca podem ter CRLF - um
+# shebang "bash"/"sh" interpreta "\r" como parte do ultimo token da linha (ex.: "set -o pipefail\r"
+# vira a opcao invalida "pipefail\r"). Sem isto, "core.autocrlf=true" no Windows reescreve esses
+# arquivos para CRLF no checkout e quebra silenciosamente qualquer script montado via volume
+# (docker-compose.yml/docker-compose.test.yml, servico "localstack-init").
+*.sh text eol=lf
+Dockerfile text eol=lf

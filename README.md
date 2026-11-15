@@ -2,7 +2,15 @@
 
 Serviço financeiro distribuído que recebe transações de apostas de provedores de jogo e
 debita/credita carteiras (`Wallet`) de jogadores com garantias de concorrência, idempotência e
-auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
+auditabilidade. Decisões técnicas e trade-offs em `ARCHITECTURE.md`.
+
+## Pré-requisitos
+
+- [Bun](https://bun.sh) 1.x (runtime e test runner do projeto).
+- [Docker](https://www.docker.com/) e Docker Compose v2 (`docker compose`, não o binário legado
+  `docker-compose`) — sobem Postgres, LocalStack (SQS) e, no setup completo, a própria aplicação.
+- Nenhuma outra dependência precisa estar instalada no host: Node só é usado **dentro** da imagem
+  Docker (ver `Dockerfile`), não é necessário no host para rodar o projeto.
 
 ## O que já funciona
 
@@ -103,7 +111,7 @@ auditabilidade. Decisões técnicas e trade-offs em `Documents/ARCHITECTURE.md`.
   `PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS`/`PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE`
   (defaults `5000`/`20`).
 - **DLQ** (`wager-transactions-dlq.fifo`) — redrive policy final: `maxReceiveCount=5` (no máximo
-  ~150s de redelivery antes da DLQ, justificativa em `Documents/ARCHITECTURE.md` seção 2.2).
+  ~150s de redelivery antes da DLQ, justificativa em `ARCHITECTURE.md` seção 2.2).
   `DlqMonitorScheduler` roda em toda instância e loga um aviso sempre que a DLQ tiver uma ou mais
   mensagens (`ApproximateNumberOfMessages`, sem consumir nem apagar nada dela — requer auditoria
   manual). Intervalo de polling configurável via `DLQ_MONITOR_POLL_INTERVAL_MS` (default `5000`).
@@ -352,3 +360,35 @@ done
 # "[DlqMonitorScheduler] 1 mensagem(ns) detectada(s) em wager-transactions-dlq.fifo - requer auditoria manual"
 docker compose start postgres
 ```
+
+## Troubleshooting
+
+- **LocalStack não sobe (`localstack` nunca fica `healthy`, `curl http://localhost:4566/_localstack/health`
+  falha):** normalmente é memória/CPU insuficiente para o container no host, ou uma imagem anterior
+  corrompida. Confira `docker compose logs localstack`; `docker compose down -v` seguido de
+  `docker compose -f docker-compose.infra.yml up -d` (ou `docker compose up -d --build` no setup
+  completo) costuma resolver — isso recria os volumes, então não use em um ambiente com dado que
+  você queira manter.
+- **`localstack-init` falha ou as filas não existem (`sqs get-queue-url` devolve erro
+  `QueueDoesNotExist`):** o serviço `localstack-init` só roda depois de `localstack` ficar saudável
+  (`depends_on: service_healthy`); se `localstack` demorou mais que o esperado para subir, rode
+  `docker compose up -d localstack-init` de novo manualmente — ele é idempotente (recriar uma fila
+  que já existe não falha).
+- **Migration falha com porta ocupada (`EADDRINUSE`/`bind: address already in use`, geralmente na
+  porta `5432` do Postgres ou `4566` do LocalStack):** outra instância do Postgres/LocalStack (deste
+  projeto ou de outro) já está usando a porta no host. Pare o processo conflitante ou mude a porta
+  publicada em `.env` (`DB_PORT`, `NGINX_PORT`, `SQS_ADMIN_PORT`) — as portas *internas* do container
+  não mudam, só a publicada no host.
+- **`migrate` e `docker-compose.test.yml` disputando os mesmos containers:** `docker-compose.yml` e
+  `docker-compose.test.yml` sobem Postgres/LocalStack com os mesmos nomes de container/volume
+  (ambos via `docker-compose.infra.yml`) — nunca os rode ao mesmo tempo. Pare um (`docker compose
+  down`) antes de subir o outro.
+- **`bun test` roda mas falha de forma incoerente (um arquivo passa isolado, mas falha dentro da
+  suíte completa):** use sempre `bun run test`/`test:unit`/`test:integration`/`test:concurrency`
+  (nunca `bun test` direto) — a flag `--isolate` que esses scripts carregam evita que o
+  `process.env` mutado por um spec vaze para outro no mesmo processo (ver seção "Comandos" acima).
+- **`docker compose ps` mostra uma réplica (`app-1`/`app-2`/`app-3`) ou o `nginx` sem ficar
+  `healthy`:** confira `docker compose logs app-1` (troque o nome do serviço) — a causa mais comum é
+  o serviço `migrate` não ter terminado com sucesso ainda (`docker compose ps migrate` deve mostrar
+  `Exited (0)`) ou uma variável de `.env` ausente/incorreta (`LEDGER_CURSOR_SECRET`, credenciais do
+  Postgres).
