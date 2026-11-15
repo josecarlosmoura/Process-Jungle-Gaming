@@ -72,4 +72,12 @@ export class OutboxMessageMikroOrmRepository implements OutboxMessageRepository 
       publishedAt: message.publishedAt ?? null,
     });
   }
+
+  async findOldestPendingOccurredAt(): Promise<Date | null> {
+    // Sem lock - amostragem (T306), nunca reivindicação. Inclui mensagens aguardando
+    // nextAttemptAt (backoff) de propósito: o lag deve refletir TODA mensagem ainda não
+    // publicada, não só as já elegíveis para a próxima tentativa.
+    const entity = await this.em.findOne(OutboxMessageEntity, { publishedAt: null }, { orderBy: { occurredAt: "asc" } });
+    return entity?.occurredAt ?? null;
+  }
 }

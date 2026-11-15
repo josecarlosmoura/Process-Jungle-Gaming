@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { EntityManager } from "@mikro-orm/postgresql";
 import { LogContextService } from "../../infrastructure/observability/log-context.service";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 import type { IntegrationEventPublisher } from "../ports/integration-event-publisher";
 import { INTEGRATION_EVENT_PUBLISHER_INTERFACE } from "../ports/integration-event-publisher";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
@@ -48,6 +49,7 @@ export class PublishOutboxUseCase {
               // reivindicadas continuam sendo processadas; so esta entra em retry (RN-47, outbox
               // sem DLQ, retry infinito).
               message.scheduleRetry(new Date());
+              MetricsService.recordRetry();
               this.logger.warn(
                 { event: "outbox_publish_failed", eventType: message.eventType, attempts: message.attempts },
                 error instanceof Error ? error.message : String(error),

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ConsoleLogger, Logger } from "@nestjs/common";
 import type { SQSClient } from "@aws-sdk/client-sqs";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 import { DlqMonitorScheduler } from "./dlq-monitor.scheduler";
 
 let warnings: string[] = [];
@@ -12,6 +13,7 @@ let errors: string[] = [];
 beforeEach(() => {
   warnings = [];
   errors = [];
+  MetricsService.resetForTesting();
   Logger.overrideLogger({
     log: () => {},
     error: (message: unknown) => {
@@ -121,6 +123,28 @@ describe("DlqMonitorScheduler", () => {
 
       expect(errors.length).toBeGreaterThanOrEqual(1);
       expect(getQueueAttributesCalls()).toBeGreaterThanOrEqual(2);
+    } finally {
+      scheduler.onModuleDestroy();
+    }
+  });
+
+  test("dlq_messages_total increments only by the positive delta between consecutive cycles, never on a flat or falling count", async () => {
+    // 0 (baseline, nunca contado) -> 2 (delta +2) -> 2 (delta 0, sem incremento) -> 5 (delta +3).
+    // Total esperado: 2 + 3 = 5.
+    const { client } = fakeSqsClient([
+      { ApproximateNumberOfMessages: "0" },
+      { ApproximateNumberOfMessages: "2" },
+      { ApproximateNumberOfMessages: "2" },
+      { ApproximateNumberOfMessages: "5" },
+    ]);
+    const scheduler = new DlqMonitorScheduler(client, "wager-transactions-dlq.fifo", 15);
+
+    try {
+      scheduler.onApplicationBootstrap();
+      await wait(80);
+
+      const text = await MetricsService.getMetricsText();
+      expect(text).toContain("dlq_messages_total 5");
     } finally {
       scheduler.onModuleDestroy();
     }

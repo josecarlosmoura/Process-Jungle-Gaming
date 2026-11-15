@@ -86,4 +86,8 @@ export class AppConfigService {
   get pendingReferenceReprocessorBatchSize(): number {
     return this.configService.get("PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE", { infer: true });
   }
+
+  get outboxLagSamplerPollIntervalMs(): number {
+    return this.configService.get("OUTBOX_LAG_SAMPLER_POLL_INTERVAL_MS", { infer: true });
+  }
 }

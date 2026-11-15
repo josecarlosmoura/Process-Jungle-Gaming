@@ -7,6 +7,7 @@ import type { OutboxMessage } from "../../domain/outbox-message";
 import { WagerTransaction } from "../../domain/wager-transaction";
 import { Wallet } from "../../domain/wallet";
 import { LogContextService } from "../../infrastructure/observability/log-context.service";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
 import type { WalletLedgerEntryRepository } from "../ports/wallet-ledger-entry.repository";
@@ -120,6 +121,7 @@ describe("ReprocessPendingReferenceUseCase", () => {
   });
 
   test("NOT_FOUND below the attempts/TTL limit schedules a retry and never rejects", async () => {
+    MetricsService.resetForTesting();
     const transaction = aPendingReferenceTransaction("wallet-a", { attempts: 3 });
     const wagerTransactionRepository = fakeWagerTransactionRepository();
     wagerTransactionRepository.claimPendingReferenceBatch = async () => [transaction];
@@ -140,6 +142,7 @@ describe("ReprocessPendingReferenceUseCase", () => {
     expect(transaction.status).toBe("PENDING_REFERENCE");
     expect(transaction.attempts).toBe(4);
     expect(outbox.saved).toHaveLength(0);
+    expect(await MetricsService.getMetricsText()).toContain("retries_total 1");
   });
 
   test("NOT_FOUND at the attempts/TTL limit rejects and never schedules another retry", async () => {

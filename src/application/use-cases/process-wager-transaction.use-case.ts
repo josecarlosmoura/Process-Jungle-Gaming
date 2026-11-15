@@ -15,6 +15,7 @@ import { InsufficientFundsError, type Wallet, WalletNotFoundError } from "../../
 import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from "../../domain/wager-transaction";
 import { WalletLedgerEntry } from "../../domain/wallet-ledger-entry";
 import { LogContextService } from "../../infrastructure/observability/log-context.service";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ReferenceResolver } from "../reference-resolver";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
@@ -94,6 +95,9 @@ export class ProcessWagerTransactionUseCase {
   ) {}
 
   async execute(command: ProcessWagerTransactionCommand): Promise<ProcessWagerTransactionResult> {
+    // Ponta a ponta: do recebimento desta chamada (HTTP ou SQS, ambos convergem aqui) ao commit -
+    // nunca inclui o tempo de parse do envelope/controller, que fica fora deste use case.
+    const startedAt = process.hrtime.bigint();
     // Mora aqui, nao no controller, para nao espalhar logica de negocio sobre kind pela camada
     // de apresentacao.
     if (!SUPPORTED_KINDS.has(command.kind)) {
@@ -121,25 +125,27 @@ export class ProcessWagerTransactionUseCase {
         const existing = await this.wagerTransactionRepository.findByIdempotencyKey(command.idempotencyKey);
         if (existing) {
           result = await this.resolveExisting(existing, payloadHash);
-          this.logOutcome(result);
+          this.logOutcome(result, kind, startedAt);
           return result;
         }
       }
       if (error instanceof DriverException && (error as DriverException).code === LOCK_NOT_AVAILABLE_SQLSTATE) {
+        MetricsService.recordLockWaitTimeout();
         throw new LockAcquisitionTimeoutError(command.walletId);
       }
       throw error;
     }
-    this.logOutcome(result);
+    this.logOutcome(result, kind, startedAt);
     return result;
   }
 
-  // Unico ponto que loga o desfecho de um execute() - nunca espalhado pelos varios metodos
+  // Unico ponto que loga/mede o desfecho de um execute() - nunca espalhado pelos varios metodos
   // privados que decidem PROCESSED/REJECTED/PENDING_REFERENCE, para nao arriscar um retorno novo
-  // esquecer de logar. Nunca inclui "money"/"balance" (RNF-11/RNF-13) - so identificadores
-  // (via LogContextService, fundidos automaticamente pelo PinoLoggerService) e metadados de
-  // decisao (status, failureCode).
-  private logOutcome(result: ProcessWagerTransactionResult): void {
+  // esquecer de logar ou de contar. Nunca inclui "money"/"balance" (RNF-11/RNF-13) - so
+  // identificadores (via LogContextService, fundidos automaticamente pelo PinoLoggerService) e
+  // metadados de decisao (status, failureCode). Metricas sao estritamente observacionais: nunca
+  // decidem nada sobre o resultado, so observam o que process()/resolveExisting() ja decidiram.
+  private logOutcome(result: ProcessWagerTransactionResult, kind: WagerTransactionKind, startedAt: bigint): void {
     LogContextService.set({ transactionId: result.transactionId });
     const fields = {
       event: "wager_transaction_outcome",
@@ -154,6 +160,10 @@ export class ProcessWagerTransactionUseCase {
     } else {
       this.logger.log(fields, "wager transaction processed");
     }
+
+    MetricsService.recordTransactionOutcome(result.status, kind);
+    const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    MetricsService.observeTransactionDuration(elapsedSeconds);
   }
 
   private async process(
@@ -460,6 +470,7 @@ export class ProcessWagerTransactionUseCase {
     if (!existing.matchesPayload(payloadHash)) {
       throw new IdempotencyConflictError(existing.idempotencyKey);
     }
+    MetricsService.recordDuplicate("http");
     return this.toReplayResult(existing);
   }
 

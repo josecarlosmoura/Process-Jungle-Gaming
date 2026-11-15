@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { EntityManager, UniqueConstraintViolationException } from "@mikro-orm/postgresql";
 import { isTransientInfrastructureFailure } from "../../domain/domain-error";
 import { InboxMessage } from "../../domain/inbox-message";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 // biome-ignore lint/style/useImportType: NestJS le o tipo do parametro do construtor em tempo de execucao (metadata de DI) - import type apagaria a classe e quebraria a injecao
 import { ProcessWagerTransactionUseCase, type ProcessWagerTransactionCommand } from "./process-wager-transaction.use-case";
 import type { InboxMessageRepository } from "../ports/inbox-message.repository";
@@ -32,18 +33,26 @@ export class ConsumeWagerTransactionMessageUseCase {
   ) {}
 
   async execute(command: ConsumeWagerTransactionMessageCommand): Promise<ConsumeWagerTransactionMessageResult> {
+    let result: ConsumeWagerTransactionMessageResult;
     try {
-      return await this.em.transactional(() => this.process(command));
+      result = await this.em.transactional(() => this.process(command));
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
         // Corrida de duas instancias recebendo a mesma mensagem: a vencedora ja inseriu (e vai
         // processar/ja processou) a linha de inbox - mesmo padrao de
         // ProcessWagerTransactionUseCase para a corrida de idempotency_key. Nunca ack explicito
         // aqui: quem chama trata DUPLICATE exatamente como "ja visto", ack normal.
-        return { outcome: "DUPLICATE" };
+        result = { outcome: "DUPLICATE" };
+      } else {
+        throw error;
       }
-      throw error;
     }
+    // Unico ponto que conta a duplicata - cobre os dois caminhos que decidem DUPLICATE (corrida
+    // de insercao acima, e o achado por findByKey dentro de process()), sem duplicar a chamada.
+    if (result.outcome === "DUPLICATE") {
+      MetricsService.recordDuplicate("inbox_sqs");
+    }
+    return result;
   }
 
   private async process(command: ConsumeWagerTransactionMessageCommand): Promise<ConsumeWagerTransactionMessageResult> {

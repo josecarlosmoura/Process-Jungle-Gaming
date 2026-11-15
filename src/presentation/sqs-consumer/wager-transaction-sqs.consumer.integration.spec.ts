@@ -56,6 +56,7 @@ const { WAGER_TRANSACTIONS_CONSUMER_NAME } = await import("../../infrastructure/
 const { TransientInfrastructureError } = await import("../../domain/domain-error");
 const { EntityManager } = await import("@mikro-orm/postgresql");
 const { PinoLoggerService } = await import("../../infrastructure/observability/pino-logger.service");
+const { MetricsService } = await import("../../infrastructure/observability/metrics.service");
 
 const env = validateEnv(process.env);
 const orm = await MikroORM.init({
@@ -252,6 +253,7 @@ describe("WagerTransactionSqsConsumer - integração (Postgres + LocalStack reai
       const consumer = moduleRef.get(WagerTransactionSqsConsumer);
       const walletId = await insertWallet("1000.00");
       const businessMessageId = `biz-${randomUUID()}`;
+      MetricsService.resetForTesting();
 
       try {
         consumer.onApplicationBootstrap();
@@ -283,6 +285,7 @@ describe("WagerTransactionSqsConsumer - integração (Postgres + LocalStack reai
         // nunca mudou de novo.
         await new Promise((resolve) => setTimeout(resolve, 4_000));
         expect(await readWalletBalance(walletId)).toBe("985.00");
+        expect(await MetricsService.getMetricsText()).toContain('idempotency_duplicates_total{channel="inbox_sqs"} 1');
       } finally {
         await consumer.onModuleDestroy();
         await deleteInboxRow(businessMessageId);

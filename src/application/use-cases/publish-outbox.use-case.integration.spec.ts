@@ -88,6 +88,22 @@ async function deleteRow(id: string): Promise<void> {
   await connection.execute("delete from outbox_messages where id = ?", [id]);
 }
 
+async function insertPendingRowAt(id: string, aggregateId: string, marker: string, occurredAt: Date): Promise<void> {
+  await connection.execute(
+    `insert into outbox_messages (id, aggregate_id, event_type, payload, occurred_at, attempts)
+     values (?, ?, 'TestEvent', ?, ?, 0)`,
+    [id, aggregateId, JSON.stringify({ marker }), occurredAt],
+  );
+}
+
+async function insertPublishedRowAt(id: string, aggregateId: string, marker: string, occurredAt: Date): Promise<void> {
+  await connection.execute(
+    `insert into outbox_messages (id, aggregate_id, event_type, payload, occurred_at, attempts, published_at)
+     values (?, ?, 'TestEvent', ?, ?, 0, now())`,
+    [id, aggregateId, JSON.stringify({ marker }), occurredAt],
+  );
+}
+
 // Dentro da suite completa, outras *.integration.spec.ts tambem abrem/fecham pools de conexao
 // contra o mesmo Postgres/LocalStack - um unico execute() pode nao ganhar a corrida do lock
 // (SKIP LOCKED legitimamente cede a linha para outro claim concorrente) ou so terminar de
@@ -271,4 +287,51 @@ describe("PublishOutboxUseCase.execute - integração (Postgres + LocalStack rea
     },
     20_000,
   );
+});
+
+describe("OutboxMessageMikroOrmRepository.findOldestPendingOccurredAt (T306)", () => {
+  test("returns the occurredAt of the oldest pending (unpublished) message, ignoring already-published ones", async () => {
+    const olderId = randomUUID();
+    const newerId = randomUUID();
+    const publishedId = randomUUID();
+    const aggregateId = randomUUID();
+    const older = new Date(Date.now() - 60_000);
+    const newer = new Date(Date.now() - 1_000);
+    const evenOlderButPublished = new Date(Date.now() - 120_000);
+    try {
+      await insertPendingRowAt(newerId, aggregateId, randomUUID(), newer);
+      await insertPendingRowAt(olderId, aggregateId, randomUUID(), older);
+      await insertPublishedRowAt(publishedId, aggregateId, randomUUID(), evenOlderButPublished);
+
+      const repository = new OutboxMessageMikroOrmRepository(orm.em.fork());
+      const result = await repository.findOldestPendingOccurredAt();
+
+      expect(result?.getTime()).toBe(older.getTime());
+    } finally {
+      await deleteRow(olderId);
+      await deleteRow(newerId);
+      await deleteRow(publishedId);
+    }
+  });
+
+  test("returns null when there is no pending message at all", async () => {
+    // Nao ha como garantir isolamento perfeito contra outros arquivos *.integration.spec.ts
+    // rodando em paralelo contra o mesmo Postgres - em vez de assumir a tabela vazia, prova a
+    // claim pelo contraste: publica a unica linha que este teste proprio controla e confirma que
+    // o resultado (seja null, seja o occurredAt de alguma outra linha pendente de outro arquivo)
+    // nunca aponta para ELA depois de publicada.
+    const id = randomUUID();
+    const aggregateId = randomUUID();
+    const occurredAt = new Date(Date.now() - 5_000);
+    try {
+      await insertPublishedRowAt(id, aggregateId, randomUUID(), occurredAt);
+
+      const repository = new OutboxMessageMikroOrmRepository(orm.em.fork());
+      const result = await repository.findOldestPendingOccurredAt();
+
+      expect(result?.getTime()).not.toBe(occurredAt.getTime());
+    } finally {
+      await deleteRow(id);
+    }
+  });
 });

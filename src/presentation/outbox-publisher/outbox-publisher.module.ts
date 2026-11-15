@@ -12,6 +12,7 @@ import type { OutboxMessageRepository } from "../../application/ports/outbox-mes
 import type { IntegrationEventPublisher } from "../../application/ports/integration-event-publisher";
 import { PublishOutboxUseCase } from "../../application/use-cases/publish-outbox.use-case";
 import { OutboxPublisherScheduler } from "./outbox-publisher.scheduler";
+import { OutboxLagSamplerScheduler } from "./outbox-lag-sampler.scheduler";
 
 @Module({
   imports: [DatabaseModule, SqsModule, AppConfigModule],
@@ -33,6 +34,12 @@ import { OutboxPublisherScheduler } from "./outbox-publisher.scheduler";
       useFactory: (orm: MikroORM, useCase: PublishOutboxUseCase, config: AppConfigService) =>
         new OutboxPublisherScheduler(orm, useCase, config.outboxPublisherPollIntervalMs),
       inject: [MikroORM, PublishOutboxUseCase, AppConfigService],
+    },
+    {
+      provide: OutboxLagSamplerScheduler,
+      useFactory: (orm: MikroORM, repository: OutboxMessageRepository, config: AppConfigService) =>
+        new OutboxLagSamplerScheduler(orm, repository, config.outboxLagSamplerPollIntervalMs),
+      inject: [MikroORM, OUTBOX_MESSAGE_REPOSITORY_INTERFACE, AppConfigService],
     },
   ],
 })

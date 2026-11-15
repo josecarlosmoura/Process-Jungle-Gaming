@@ -5,6 +5,7 @@ import {
   type OnModuleDestroy,
 } from "@nestjs/common";
 import { GetQueueAttributesCommand, GetQueueUrlCommand, type SQSClient } from "@aws-sdk/client-sqs";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 
 // Adaptador fino de "gatilho = tempo", mesmo nivel de camada de Apresentacao que
 // OutboxPublisherScheduler/WagerTransactionSqsConsumer (CLAUDE.md) - roda em toda instancia, sem
@@ -18,6 +19,10 @@ export class DlqMonitorScheduler implements OnApplicationBootstrap, OnModuleDest
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private queueUrlPromise?: Promise<string>;
+  // undefined so antes do primeiro ciclo - o primeiro valor observado e so a baseline, nunca
+  // contado como "chegada nova" (o SQS nao expoe um contador cumulativo real, so a contagem
+  // aproximada corrente; so a partir do segundo ciclo um aumento e de fato uma chegada).
+  private previousCount?: number;
 
   constructor(
     private readonly sqsClient: SQSClient,
@@ -56,6 +61,10 @@ export class DlqMonitorScheduler implements OnApplicationBootstrap, OnModuleDest
           `${count} mensagem(ns) detectada(s) em ${this.queueName} - requer auditoria manual`,
         );
       }
+      if (this.previousCount !== undefined) {
+        MetricsService.recordDlqMessages(count - this.previousCount);
+      }
+      this.previousCount = count;
     } catch (error) {
       // Mesmo padrao de OutboxPublisherScheduler - um ciclo que falha (ex.: LocalStack fora do
       // ar) nunca derruba o worker, so loga e segue para o proximo ciclo.

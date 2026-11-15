@@ -4,6 +4,7 @@ import type { EntityManager } from "@mikro-orm/postgresql";
 import type { EventContext, IntegrationEventProps } from "../../domain/integration-event";
 import { IntegrationEvent } from "../../domain/integration-event";
 import { LogContextService } from "../../infrastructure/observability/log-context.service";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 import { OutboxMessage } from "../../domain/outbox-message";
 import type { IntegrationEventPublisher } from "../ports/integration-event-publisher";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
@@ -56,6 +57,7 @@ function fakeRepository(batch: OutboxMessage[]): OutboxMessageRepository & { upd
 
 describe("PublishOutboxUseCase.execute", () => {
   test("execute marks the successfully published messages and schedules a retry for the one that failed, without aborting the rest of the batch", async () => {
+    MetricsService.resetForTesting();
     const ok1 = buildMessage("event-1");
     const failing = buildMessage("event-2");
     const ok2 = buildMessage("event-3");
@@ -76,6 +78,7 @@ describe("PublishOutboxUseCase.execute", () => {
     expect(failing.publishedAt).toBeUndefined();
     expect(failing.attempts).toBe(1);
     expect(failing.nextAttemptAt).toBeDefined();
+    expect(await MetricsService.getMetricsText()).toContain("retries_total 1");
     expect(repository.updated.map((m) => m.id)).toEqual([ok1.id, failing.id, ok2.id]);
   });
 

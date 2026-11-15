@@ -10,6 +10,7 @@ import { OutboxMessage } from "../../domain/outbox-message";
 import type { ReversalKind, WagerTransaction } from "../../domain/wager-transaction";
 import { WalletNotFoundError } from "../../domain/wallet";
 import { LogContextService } from "../../infrastructure/observability/log-context.service";
+import { MetricsService } from "../../infrastructure/observability/metrics.service";
 import type { OutboxMessageRepository } from "../ports/outbox-message.repository";
 import { OUTBOX_MESSAGE_REPOSITORY_INTERFACE } from "../ports/outbox-message.repository";
 import type { WagerTransactionRepository } from "../ports/wager-transaction.repository";
@@ -109,6 +110,7 @@ export class ReprocessPendingReferenceUseCase {
         return;
       }
       transaction.scheduleReferenceRetry(now);
+      MetricsService.recordRetry();
       await this.wagerTransactionRepository.save(transaction);
       return;
     }

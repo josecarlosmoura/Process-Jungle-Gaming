@@ -49,6 +49,9 @@ export const envSchema = z.object({
   // OUTBOX_PUBLISHER_POLL_INTERVAL_MS/OUTBOX_PUBLISHER_BATCH_SIZE.
   PENDING_REFERENCE_REPROCESSOR_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(5000),
   PENDING_REFERENCE_REPROCESSOR_BATCH_SIZE: z.coerce.number().int().min(1).default(20),
+  // Intervalo de poll do OutboxLagSamplerScheduler (T306) - ciclo proprio, independente de
+  // OUTBOX_PUBLISHER_POLL_INTERVAL_MS, para a amostra do lag continuar mesmo se o publisher parar.
+  OUTBOX_LAG_SAMPLER_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(5000),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

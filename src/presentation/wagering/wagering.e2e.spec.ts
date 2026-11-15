@@ -36,6 +36,7 @@ const { ReferenceResolver } = await import("../../application/reference-resolver
 const { ReprocessPendingReferenceUseCase } = await import("../../application/use-cases/reprocess-pending-reference.use-case");
 const { correlationIdMiddleware, CORRELATION_ID_HEADER } = await import("../../infrastructure/observability/correlation-id.middleware");
 const { PinoLoggerService } = await import("../../infrastructure/observability/pino-logger.service");
+const { MetricsService } = await import("../../infrastructure/observability/metrics.service");
 
 const PORT = 4316;
 const baseUrl = `http://127.0.0.1:${PORT}`;
@@ -175,6 +176,29 @@ function captureLogLines(): { lines: () => Record<string, unknown>[] } {
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line)),
   };
+}
+
+// Le o valor de uma serie Prometheus pelo nome e pelo conjunto exato de labels - "exato" de
+// proposito (compara o conjunto de pares "label=\"valor\"" inteiro, nunca so um substring), para
+// nao casar por acidente com outra combinacao de labels da mesma metrica.
+function readMetricValue(text: string, name: string, labels: Record<string, string> = {}): number | undefined {
+  const labelPairs = Object.entries(labels)
+    .map(([key, value]) => `${key}="${value}"`)
+    .sort();
+  for (const line of text.split("\n")) {
+    if (!line.startsWith(`${name}{`) && !line.startsWith(`${name} `)) {
+      continue;
+    }
+    const match = line.match(/^[a-zA-Z_:][a-zA-Z0-9_:]*(\{(.*)\})?\s+([0-9.eE+-]+)$/);
+    if (!match) {
+      continue;
+    }
+    const lineLabelPairs = (match[2] ?? "").split(",").filter((part) => part.length > 0).sort();
+    if (JSON.stringify(lineLabelPairs) === JSON.stringify(labelPairs)) {
+      return Number(match[3]);
+    }
+  }
+  return undefined;
 }
 
 interface MoneyBody {
@@ -1964,6 +1988,7 @@ describe("POST /wagering/transactions - lock da wallet não obtido em 5s", () =>
     "a BET on a wallet locked by another transaction for longer than the lock_timeout returns 503 with failureCode INTERNAL_ERROR, persists no WagerTransaction and leaves the balance unchanged",
     async () => {
       const walletId = await insertWallet("1000.00");
+      MetricsService.resetForTesting();
       const trx = await connection.begin();
       try {
         await connection.execute("select id from wallets where id = ? for update", [walletId], "get", trx);
@@ -1977,6 +2002,7 @@ describe("POST /wagering/transactions - lock da wallet não obtido em 5s", () =>
         expect(body.transactionId).toBeUndefined();
         expect(elapsedMs).toBeGreaterThan(4_000);
         expect(await countWhere("wager_transactions", "wallet_id", walletId)).toBe(0);
+        expect(readMetricValue(await MetricsService.getMetricsText(), "lock_wait_timeout_total")).toBe(1);
 
         const rows = await connection.execute<{ balance_amount: string }[]>(
           "select balance_amount from wallets where id = ?",
@@ -2620,6 +2646,57 @@ describe("Logs estruturados e correlationId", () => {
       for (const forbidden of ["money", "amount", "idempotencyKey", "payloadHash", "roundId", "gameId", "externalTransactionId"]) {
         expect(serialized.includes(`"${forbidden}"`)).toBe(false);
       }
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+});
+
+describe("Métricas (Prometheus)", () => {
+  test("a PROCESSED BET increments wager_transactions_total{status=PROCESSED,kind=BET} and observes a transaction duration", async () => {
+    MetricsService.resetForTesting();
+    const walletId = await insertWallet("1000.00");
+    try {
+      const { status } = await postBet(betPayload(walletId), `provider-a:${randomUUID()}`);
+      expect(status).toBe(201);
+
+      const text = await MetricsService.getMetricsText();
+      expect(readMetricValue(text, "wager_transactions_total", { status: "PROCESSED", kind: "BET" })).toBe(1);
+      expect(readMetricValue(text, "wager_transaction_duration_seconds_count")).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("a BET rejected by insufficient funds increments wager_transactions_total{status=REJECTED,kind=BET}", async () => {
+    MetricsService.resetForTesting();
+    const walletId = await insertWallet("20.00");
+    try {
+      const { status } = await postBet(betPayload(walletId, { money: { amount: "20.01", currency: "BRL" } }), `provider-a:${randomUUID()}`);
+      expect(status).toBe(422);
+
+      const text = await MetricsService.getMetricsText();
+      expect(readMetricValue(text, "wager_transactions_total", { status: "REJECTED", kind: "BET" })).toBe(1);
+    } finally {
+      await deleteWalletCascade(walletId);
+    }
+  });
+
+  test("replaying the same Idempotency-Key with the same payload increments idempotency_duplicates_total{channel=http}", async () => {
+    MetricsService.resetForTesting();
+    const walletId = await insertWallet("1000.00");
+    const idempotencyKey = `provider-a:${randomUUID()}`;
+    const payload = betPayload(walletId, { money: { amount: "25.00", currency: "BRL" } });
+    try {
+      const first = await postBet(payload, idempotencyKey);
+      expect(first.status).toBe(201);
+
+      const replay = await postBet(payload, idempotencyKey);
+      expect(replay.status).toBe(200);
+      expect(replay.body.idempotentReplay).toBe(true);
+
+      const text = await MetricsService.getMetricsText();
+      expect(readMetricValue(text, "idempotency_duplicates_total", { channel: "http" })).toBe(1);
     } finally {
       await deleteWalletCascade(walletId);
     }

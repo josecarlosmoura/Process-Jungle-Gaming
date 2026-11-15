@@ -11,4 +11,7 @@ export interface OutboxMessageRepository {
   // Persiste attempts/nextAttemptAt/publishedAt de uma mensagem ja reivindicada por
   // claimPendingBatch, na mesma transacao/lock - nunca cria uma linha nova.
   updateDeliveryState(message: OutboxMessage): Promise<void>;
+  // Leitura pura, sem lock - usada só para amostrar o lag (T306), nunca para reivindicar
+  // mensagens. null quando não há nenhuma mensagem pendente (published_at IS NULL).
+  findOldestPendingOccurredAt(): Promise<Date | null>;
 }
