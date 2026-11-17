@@ -1,0 +1,43 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Descoberta via Docker socket (montado read-only pelo compose) - nunca le arquivo de log em
+  # disco diretamente, pois o driver padrao do Docker Desktop (Windows/Mac) roda numa VM Linux
+  # a parte, onde o caminho /var/lib/docker/containers/... do host nao e o mesmo visto por este
+  # container. docker_sd_configs fala com a API do Docker, que funciona em qualquer host.
+  - job_name: wagering-app-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Nunca filtra (drop/keep) por container aqui - um regex que so bate em app-1/app-2/app-3
+      # deixaria "container" vazio para qualquer outro container (postgres, nginx, o proprio
+      # promtail etc.), e um stream sem NENHUM label e rejeitado pelo Loki ("at least one label
+      # pair is required"). Mais simples e robusto coletar de todos (regex sem condicao, nunca
+      # vazio) e filtrar so as 3 replicas na query LogQL do painel de logs do dashboard
+      # (observability/grafana/dashboards/wagering-overview.json) via o label "container".
+      - source_labels: [__meta_docker_container_name]
+        regex: "^/(.*)$"
+        target_label: container
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+    pipeline_stages:
+      # "level" vira label (baixa cardinalidade - poucos valores possiveis: info/warn/error) para
+      # filtrar rapido no Grafana; correlationId/event ficam só no corpo JSON, nunca como label
+      # (alta cardinalidade - um label por valor distinto explodiria o indice do Loki). Containers
+      # cujo log nao e JSON (postgres, nginx etc.) simplesmente nao ganham o label "level" - o
+      # estagio "json" so loga a falha em log_level=debug (nunca habilitado aqui), entao e
+      # silencioso em condicoes normais.
+      - json:
+          expressions:
+            level: level
+      - labels:
+          level:

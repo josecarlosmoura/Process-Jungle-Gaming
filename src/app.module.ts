@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AppConfigModule } from "./infrastructure/config/app-config.module";
+import { AuthGuardModule } from "./presentation/common/auth-guard.module";
 import { DlqMonitorModule } from "./presentation/dlq-monitor/dlq-monitor.module";
 import { DomainErrorHandlingModule } from "./presentation/common/domain-error-handling.module";
 import { HealthModule } from "./presentation/health/health.module";
@@ -14,6 +15,7 @@ import { WageringModule } from "./presentation/wagering/wagering.module";
   imports: [
     AppConfigModule,
     DomainErrorHandlingModule,
+    AuthGuardModule,
     HealthModule,
     MetricsModule,
     WalletsModule,

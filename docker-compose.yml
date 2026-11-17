@@ -1,5 +1,6 @@
 include:
   - docker-compose.infra.yml
+  - docker-compose.observability.yml
 
 # Config compartilhada pelas 3 replicas da aplicacao (app-1/app-2/app-3) - 3 servicos nomeados,
 # nunca "deploy.replicas"/"--scale" (Diagrama-Arquitetura.md secao 5 ja desenha a topologia com

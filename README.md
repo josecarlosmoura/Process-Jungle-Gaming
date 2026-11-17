@@ -133,6 +133,15 @@ auditabilidade. Decisões técnicas e trade-offs em `ARCHITECTURE.md`.
   **ciclo de tempo próprio e independente** do Outbox Publisher Worker — continua subindo mesmo com o
   publisher pausado). Nenhuma métrica tem label de alta cardinalidade (nunca `playerId`/`walletId`/
   `transactionId`) nem influencia o resultado de nenhum caso de uso — são estritamente observacionais.
+- **Observabilidade visual (Prometheus + Grafana + Loki/Promtail)** — extensão opcional (fora do
+  escopo pontuado), subida junto do ambiente completo via `docker-compose.observability.yml`
+  (incluído por `docker-compose.yml`). Prometheus faz *scrape* do `/metrics` das 3 réplicas; Loki +
+  Promtail coletam os logs estruturados dos 3 containers `app-*` via o socket do Docker; Grafana já
+  vem com os dois como *datasource* e com o dashboard "Distributed Wagering Processor - Overview"
+  pré-provisionado (throughput por status/kind, latência p50/p95/p99, duplicatas de idempotência,
+  retries/DLQ/lock-timeout, outbox lag, e um painel de logs das 3 réplicas) — nada a configurar na
+  UI. Acesse em `http://localhost:${GRAFANA_PORT:-3001}` (login `admin`/`admin` por padrão).
+  Detalhes em `ARCHITECTURE.md` seção 12.3.
 
 ## Setup local
 
@@ -153,8 +162,8 @@ atrás de um nginx, RF-16/RNF-08):**
 
 ```bash
 cp .env.example .env               # ajuste se necessário
-docker compose up -d --build       # Postgres + LocalStack + migrations + app-1/app-2/app-3 + nginx
-docker compose ps                  # confirma os 9 serviços saudáveis (2 one-shot "Exited (0)")
+docker compose up -d --build       # Postgres + LocalStack + migrations + app-1/app-2/app-3 + nginx + Prometheus/Grafana/Loki/Promtail
+docker compose ps                  # confirma os 13 serviços saudáveis (2 one-shot "Exited (0)")
 curl -s http://localhost/health/ready   # porta pública do nginx (${NGINX_PORT:-80})
 ```
 

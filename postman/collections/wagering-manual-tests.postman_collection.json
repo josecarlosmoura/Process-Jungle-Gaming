@@ -1,0 +1,2240 @@
+{
+  "info": {
+    "_postman_id": "63f92702-fe9d-4370-bb86-1c97836f3808",
+    "name": "Distributed Wagering Processor - Testes Manuais",
+    "description": "Collection gerada a partir de test/manual/Roteiro-Testes-Manuais.md - siga as pastas em ordem.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Fase 1 - Health e Metrics",
+      "item": [
+        {
+          "name": "TM-01 - GET /health/live",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/health/live",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "health",
+                "live"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-02 - GET /health/ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/health/ready",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-03 - GET /metrics (estado inicial)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/metrics",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 2 - Criacao de Wallets",
+      "item": [
+        {
+          "name": "TM-04 - POST /wallets (W1 com saldo inicial)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"player-principal\",\n  \"initialBalance\": {\n    \"amount\": \"1000.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"walletIdW1\", pm.response.json().id); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-05 - POST /wallets (W2 sem saldo inicial)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"player-zerada\",\n  \"initialBalance\": {\n    \"amount\": \"0.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"walletIdW2\", pm.response.json().id); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-06 - POST /wallets payload invalido (sem playerId)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-07 - POST /wallets moeda invalida (minuscula)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"player-moeda-invalida\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"brl\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-08 - POST /wallets duplicada (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"player-principal\",\n  \"initialBalance\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 409\", function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 3 - Consulta de Wallet",
+      "item": [
+        {
+          "name": "TM-09 - GET /wallets/{W1}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-10 - GET /wallets/{W2}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW2}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW2}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-11 - GET /wallets/{inexistente} (404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-12 - GET /wallets/{invalido} (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/nao-e-um-uuid",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "nao-e-um-uuid"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-13 - GET /wallets/{W2}/ledger (vazio)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW2}}/ledger",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW2}}",
+                "ledger"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-14 - POST /wagering/transactions WIN sem referencia (credita W2)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-b:win-w2-credito-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-b\",\n  \"externalTransactionId\": \"win-w2-credito-001\",\n  \"playerId\": \"player-zerada\",\n  \"walletId\": \"{{walletIdW2}}\",\n  \"roundId\": \"round-w2-credito-1\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"200.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 4 - Fluxo principal (W1)",
+      "item": [
+        {
+          "name": "TM-15 - BET bet-001 (debito 100.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"transactionIdBet001\", pm.response.json().transactionId); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-16 - WIN win-001 ref bet-001 (credito 150.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:win-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"win-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"150.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"transactionIdWin001\", pm.response.json().transactionId); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-17 - LOSS loss-001 (sem efeito no saldo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:loss-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"loss-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"LOSS\",\n  \"money\": {\n    \"amount\": \"20.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-18 - REFUND refund-001 ref bet-001 (credito 100.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:refund-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"refund-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-19 - ROLLBACK rollback-001 ref win-001 (debito 150.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:rollback-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"rollback-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"150.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"win-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 5 - Idempotencia",
+      "item": [
+        {
+          "name": "TM-20 - Replay exato do TM-15 (200, idempotentReplay=true)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"idempotentReplay is true\", function () { pm.expect(pm.response.json().idempotentReplay).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-21 - Conflito de idempotencia (409 IDEMPOTENCY_CONFLICT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"999.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 409\", function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 6 - Rejeicoes de negocio",
+      "item": [
+        {
+          "name": "TM-22 - BET bet-002 (INSUFFICIENT_FUNDS)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-002"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-002\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-002\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"5000.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is INSUFFICIENT_FUNDS\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"INSUFFICIENT_FUNDS\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-23 - BET bet-003 (CURRENCY_MISMATCH)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-003"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-003\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-003\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"USD\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is CURRENCY_MISMATCH\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"CURRENCY_MISMATCH\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-24 - BET bet-004 (base para testes de referencia)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-004"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-004\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-004\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"50.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-25 - WIN win-003 ref bet-004 com roundId diferente (REFERENCE_MISMATCH)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:win-003"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"win-003\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-003-diferente\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"500.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-004\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is REFERENCE_MISMATCH\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"REFERENCE_MISMATCH\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-26 - REFUND refund-002 ref win-001 kind errado (REFERENCE_MISMATCH)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:refund-002"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"refund-002\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"150.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"win-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is REFERENCE_MISMATCH\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"REFERENCE_MISMATCH\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-27 - REFUND refund-003 ref bet-004 valor errado (REFERENCE_AMOUNT_MISMATCH)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:refund-003"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"refund-003\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-004\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"999.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-004\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is REFERENCE_AMOUNT_MISMATCH\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"REFERENCE_AMOUNT_MISMATCH\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-28 - REFUND refund-004 ref bet-001 ja revertida (REFERENCE_ALREADY_REVERSED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:refund-004"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"refund-004\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-001\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is REFERENCE_ALREADY_REVERSED\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"REFERENCE_ALREADY_REVERSED\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-29 - WIN win-002 ref bet-004 valida (credito 500.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:win-002"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"win-002\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-004\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"500.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-004\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"transactionIdWin002\", pm.response.json().transactionId); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-30 - BET bet-005 (deixa saldo baixo: 1400.00)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-005"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-005\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-005\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1400.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-31 - ROLLBACK rollback-002 ref win-002 (REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:rollback-002"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"rollback-002\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-004\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"500.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"win-002\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"failureCode is REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE\", function () { pm.expect(pm.response.json().failureCode).to.eql(\"REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 7 - Validacoes 400 adicionais",
+      "item": [
+        {
+          "name": "TM-32 - POST sem header Idempotency-Key (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-sem-idem-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-x\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-33 - kind nao suportado DEPOSIT (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:deposit-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"deposit-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-x\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"DEPOSIT\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-34 - REFUND sem referenceExternalTransactionId (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:refund-sem-ref-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"refund-sem-ref-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-x\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-35 - walletId malformado no body (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-wallet-invalido-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-wallet-invalido-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"nao-e-um-uuid\",\n  \"roundId\": \"round-x\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-36 - GET transactionId malformado (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions/nao-e-um-uuid",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions",
+                "nao-e-um-uuid"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-37 - GET transacao inexistente (404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 8 - PENDING_REFERENCE fora de ordem",
+      "item": [
+        {
+          "name": "TM-38 - ROLLBACK rollback-fora-ordem-001 ref bet inexistente (202 PENDING_REFERENCE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:rollback-fora-ordem-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"rollback-fora-ordem-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-fora-ordem-1\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"30.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"bet-fora-ordem-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 202\", function () { pm.response.to.have.status(202); });",
+                  "pm.test(\"status is PENDING_REFERENCE\", function () { pm.expect(pm.response.json().status).to.eql(\"PENDING_REFERENCE\"); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"transactionIdRollbackForaOrdem\", pm.response.json().transactionId); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-40 - BET bet-fora-ordem-001 chega (201)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "provider-a:bet-fora-ordem-001"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"bet-fora-ordem-001\",\n  \"playerId\": \"player-principal\",\n  \"walletId\": \"{{walletIdW1}}\",\n  \"roundId\": \"round-fora-ordem-1\",\n  \"gameId\": \"fortune-chimp\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"30.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-41 - GET rollback fora de ordem (aguarde ~65s antes de rodar - deve estar PROCESSED)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions/{{transactionIdRollbackForaOrdem}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions",
+                "{{transactionIdRollbackForaOrdem}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-42 - GET /wallets/{W1} (confirma saldo final 50.00)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 9 - Consultas de transacao",
+      "item": [
+        {
+          "name": "TM-43 - GET transacao por id interno (bet-001)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wagering/transactions/{{transactionIdBet001}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wagering",
+                "transactions",
+                "{{transactionIdBet001}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-44 - GET transacao por provider+externalId (bet-001)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/providers/provider-a/wagering/transactions/bet-001",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "providers",
+                "provider-a",
+                "wagering",
+                "transactions",
+                "bet-001"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 10 - Ledger paginado",
+      "item": [
+        {
+          "name": "TM-45 - GET ledger pagina 1 (limit=3)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/ledger?limit=3",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "ledger"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "3"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code < 300) {",
+                  "  try { pm.collectionVariables.set(\"ledgerCursorPagina1\", pm.response.json().nextCursor); } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-46 - GET ledger pagina 2 (cursor)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/ledger?cursor={{ledgerCursorPagina1}}&limit=3",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "ledger"
+              ],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "{{ledgerCursorPagina1}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "3"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-47 - GET ledger limit invalido nao-numerico (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/ledger?limit=abc",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "ledger"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "abc"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-48 - GET ledger limit invalido zero (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/ledger?limit=0",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "ledger"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 11 - Reconciliacao",
+      "item": [
+        {
+          "name": "TM-49 - POST reconciliation (consistente)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/reconciliation",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "reconciliation"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"consistent true\", function () { pm.expect(pm.response.json().consistent).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-51 - POST reconciliation (divergente, apos UPDATE manual no banco - ver roteiro TM-50)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/reconciliation",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "reconciliation"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-53 - POST reconciliation (consistente de novo, apos reverter UPDATE - ver roteiro TM-52)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW1}}/reconciliation",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW1}}",
+                "reconciliation"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"consistent true\", function () { pm.expect(pm.response.json().consistent).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 12 - Mensageria SQS (conferencia HTTP antes/depois)",
+      "item": [
+        {
+          "name": "TM-56b - GET /wallets/{W2} apos envio SQS da BET (185.00 esperado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW2}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW2}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-57b - GET /wallets/{W2} apos reenvio da mesma mensagem (185.00 inalterado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/wallets/{{walletIdW2}}",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletIdW2}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "TM-58 - GET /metrics (confere idempotency_duplicates_total channel=inbox_sqs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/metrics",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fase 16 - Metricas finais",
+      "item": [
+        {
+          "name": "TM-67 - GET /metrics (estado final)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/metrics",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost"
+    },
+    {
+      "key": "walletIdW1",
+      "value": ""
+    },
+    {
+      "key": "walletIdW2",
+      "value": ""
+    },
+    {
+      "key": "transactionIdBet001",
+      "value": ""
+    },
+    {
+      "key": "transactionIdWin001",
+      "value": ""
+    },
+    {
+      "key": "transactionIdWin002",
+      "value": ""
+    },
+    {
+      "key": "transactionIdRollbackForaOrdem",
+      "value": ""
+    },
+    {
+      "key": "ledgerCursorPagina1",
+      "value": ""
+    }
+  ]
+}

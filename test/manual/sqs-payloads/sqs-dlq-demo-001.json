@@ -1,0 +1,16 @@
+{
+  "messageId": "msg-dlq-demo-001",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-11-16T12:00:00.000Z",
+  "data": {
+    "providerId": "provider-b",
+    "externalTransactionId": "bet-dlq-demo-001",
+    "idempotencyKey": "provider-b:bet-dlq-demo-001",
+    "playerId": "player-zerada",
+    "walletId": "__WALLET_ID_W2__",
+    "roundId": "round-dlq-1",
+    "gameId": "fortune-chimp",
+    "kind": "BET",
+    "money": { "amount": "10.00", "currency": "BRL" }
+  }
+}

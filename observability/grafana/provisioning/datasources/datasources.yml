@@ -1,0 +1,20 @@
+apiVersion: 1
+
+# uid fixo em cada datasource - o dashboard provisionado (observability/grafana/dashboards/
+# wagering-overview.json) referencia esses mesmos uids diretamente, para nao depender da ordem
+# de criacao nem reconfigurar o dashboard a cada "docker compose down -v".
+datasources:
+  - name: Prometheus
+    uid: prometheus-ds
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Loki
+    uid: loki-ds
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false

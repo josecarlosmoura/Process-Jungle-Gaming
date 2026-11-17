@@ -1,0 +1,16 @@
+{
+  "messageId": "msg-sqs-001",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-11-16T12:00:00.000Z",
+  "data": {
+    "providerId": "provider-b",
+    "externalTransactionId": "bet-sqs-001",
+    "idempotencyKey": "provider-b:bet-sqs-001",
+    "playerId": "player-zerada",
+    "walletId": "__WALLET_ID_W2__",
+    "roundId": "round-sqs-1",
+    "gameId": "fortune-chimp",
+    "kind": "BET",
+    "money": { "amount": "15.00", "currency": "BRL" }
+  }
+}

@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: wagering-dashboards
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      # Fora da arvore /etc/grafana/provisioning/dashboards de proposito - montar esse path como
+      # bind mount separado DENTRO de outro bind mount (/etc/grafana/provisioning/dashboards, que
+      # ja traz dashboards.yml) falha ao criar o container (mkdirat: read-only file system), pois a
+      # imagem monta os dois ao mesmo tempo sem conseguir criar o mountpoint aninhado em runtime.
+      path: /var/lib/grafana/dashboards

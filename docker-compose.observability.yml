@@ -1,0 +1,103 @@
+# Stack de observabilidade (Prometheus + Grafana + Loki + Promtail) - extensao opcional, fora do
+# escopo pontuado pelo desafio original (ARCHITECTURE.md secao 12.3 ja previa isto como ponto de
+# extensao futuro). Nunca sobe isolado - sempre via "include" de docker-compose.yml, que tambem
+# traz docker-compose.infra.yml (rede "wagering-net") e as 3 replicas "app-*": o Prometheus faz
+# scrape delas e o Promtail descobre seus containers via Docker socket, nenhum dos dois referencia
+# "app-*" na sintaxe deste arquivo (resolvido em runtime pela rede Docker, nao pelo Compose).
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: wagering-prometheus
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - wagering-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: wagering-loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - wagering-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: wagering-promtail
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      # Docker socket, somente leitura - descoberta de containers (docker_sd_configs) e leitura de
+      # logs via API do Docker, nunca lendo arquivo de log em disco direto (ver comentario em
+      # observability/promtail/promtail-config.yml).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+    networks:
+      - wagering-net
+    depends_on:
+      loki:
+        condition: service_healthy
+    # Sem healthcheck: a imagem grafana/promtail nao traz wget/curl/nc (so coreutils basico) para
+    # sondar http://localhost:9080/ready por dentro do proprio container, e nada no resto da stack
+    # depende de "promtail: condition: service_healthy" - "docker compose ps" continua mostrando
+    # "Up"/"Exited" normalmente, so sem o selo "(healthy)".
+
+  grafana:
+    image: grafana/grafana-oss:10.4.3
+    container_name: wagering-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      # Porta interna do container e sempre 3000 (fixa na imagem) - so a porta publicada no host
+      # muda via GRAFANA_PORT, para nunca colidir com a porta 3000 interna de app-1/app-2/app-3.
+      - "${GRAFANA_PORT:-3001}:3000"
+    networks:
+      - wagering-net
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+networks:
+  wagering-net:
+    name: wagering-net
+
+volumes:
+  prometheus_data:
+    name: prometheus_data
+  loki_data:
+    name: loki_data
+  grafana_data:
+    name: grafana_data
